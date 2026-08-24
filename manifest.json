@@ -1,9 +1,10 @@
 {
+  "id": "monchichi-world-pwa",
   "name": "monchichi's world",
   "short_name": "monchichi",
   "description": "个人生活工作台 · 日程 / 学习 / 财务 / 理财 / 健康 一站式管理",
-  "start_url": ".",
-  "scope": ".",
+  "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "background_color": "#FFF7F0",

@@ -2,7 +2,7 @@
  * App shell caching. Network-first for navigation (cloud sync + live quotes
  * need fresh data), cache-first for static assets with offline fallback.
  */
-const CACHE = 'monchichi-v1';
+const CACHE = 'monchichi-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -47,6 +47,12 @@ self.addEventListener('fetch', (e) => {
         })
         .catch(() => caches.match('./index.html').then((m) => m || caches.match('./')))
     );
+    return;
+  }
+
+  // Daily briefs: always network-first (fresh, never cache stale briefs).
+  if (url.pathname.endsWith('briefs.json')) {
+    e.respondWith(fetch(req).catch(() => caches.match(req)));
     return;
   }
 
