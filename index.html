@@ -3560,6 +3560,9 @@ async function loadBriefs(force){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
 const GLOB_IDX=[['100.DJIA','道琼斯'],['100.SPX','标普500'],['100.NDX','纳斯达克'],['100.HSI','恒生指数']];
+// 盘前增量指标：富时 A50 期指（新加坡） / 离岸人民币 USDCNH
+// A50 新交所期指（secid 101.XINA50C 实际不通用；改用东财外盘期货列表间接验证失败，故先用 USDCNH；A50 留接口待补）
+const MORN_IDX_EXTRA=[['133.USDCNH','离岸人民币']];
 const nv=v=>(v==null||v===''||v==='-')?null:(isNaN(+v)?null:+v);
 function briefSlotNow(h){return (h==null?new Date().getHours():h)>=15?'evening':'morning';}
 async function briefFetchIdx(secids){
@@ -3583,7 +3586,41 @@ async function briefFetchZT(){
  const j=await jsonpGet(url,8000);
  const info=j&&j.data&&j.data.info;if(!info||!info.length)return null;
  const lbs=info.map(x=>nv(x.lbc)||1);
+ // 兼容展示：今日涨停池 / 炸板数 / 最高连板 / 昨日涨停今日表现 — 简报只取 3 个核心字段；高阶可后续拓展连板梯队接口
  return {count:info.length,maxLb:Math.max.apply(null,lbs),zb:info.filter(x=>(nv(x.zbc)||0)>0).length};
+}
+// 北向资金：东财沪深港通当日净买入（沪股通 + 深股通）
+async function briefFetchNorth(){
+ try{
+  const url='https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=4&po=1&np=1&fltt=2&invt=2&fid=f3&fs=m:1+t:1+f:!2,m:0+t:1+f:!2&fields=f12,f14,f2,f3,f104,f105,f106&ut='+EM_UT;
+  const j=await jsonpGet(url,8000);
+  const d=j&&j.data&&j.data.diff;if(!d)return null;
+  const arr=Array.isArray(d)?d:Object.values(d);
+  // f2 指数点位（北向资金指数化展示）、f104 净买额万元 / f6 成交额；本接口仅在盘中实时展示，盘后口径需重设
+  return arr.map(x=>({code:String(x.f12||''),name:String(x.f14||''),price:nv(x.f2),chg:nv(x.f3),netIn:nv(x.f104)}));
+ }catch(e){return null;}
+}
+// 龙虎榜：东财每日活跃游资/机构席位买卖方向摘要
+async function briefFetchLonghubang(){
+ try{
+  const d=new Date(),ds=d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');
+  const url='https://push2ex.eastmoney.com/getTopicLHBInstList?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&date='+ds+'&type=inst';
+  const j=await jsonpGet(url,8000);
+  const info=j&&j.data&&j.data.info;if(!info||!info.length)return null;
+  // 取净买卖额 top 4（机构 + 游资席位）
+  const ranked=info.slice().sort((a,b)=>Math.abs(nv(b.net)||0)-Math.abs(nv(a.net)||0)).slice(0,4);
+  return ranked.map(x=>({name:String(x.name||''),type:String(x.type||''),net:nv(x.net),tag:String(x.tag||'')}));
+ }catch(e){return null;}
+}
+// 商品夜盘/主要大宗商品（能源·有色·化工）：东财商品期货接口
+async function briefFetchFutures(){
+ try{
+  const url='https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=20&po=1&np=1&fltt=2&invt=2&fid=f3&fs=m:113+t:1,m:113+t:2,m:113+t:3,m:113+t:4,m:113+t:5&fields=f12,f14,f3,f2&ut='+EM_UT;
+  const j=await jsonpGet(url,8000);
+  const d=j&&j.data&&j.data.diff;if(!d)return null;
+  const arr=Array.isArray(d)?d:Object.values(d);
+  return arr.map(x=>({code:String(x.f12||''),name:String(x.f14||''),price:nv(x.f2),chg:nv(x.f3)})).filter(x=>x.name);
+ }catch(e){return null;}
 }
 const bpc=v=>v==null?'—':(v>0?'+':'')+num(v)+'%';
 const bamt=v=>{if(v==null)return '—';const a=v/1e8;return a>=10000?(a/10000).toFixed(2)+' 万亿':a.toFixed(0)+' 亿';};
@@ -3594,53 +3631,121 @@ function briefCompose(slot,dt,gen){
  const date=gen.getFullYear()+'-'+pad2(gen.getMonth()+1)+'-'+pad2(gen.getDate());
  const time=pad2(gen.getHours())+':'+pad2(gen.getMinutes());
  const id='b'+date.replace(/-/g,'')+(isEve?'-pm':'-am');
- const idx=dt.idx||[],boards=dt.boards||[],glob=dt.glob||[],zt=dt.zt||null;
+ const idx=dt.idx||[],boards=dt.boards||[],glob=dt.glob||[],zt=dt.zt||null,north=dt.north||null,lhb=dt.lhb||null,futs=dt.futs||null;
  const sh=idx.find(x=>x.name==='上证指数')||{},sz=idx.find(x=>x.name==='深证综指')||{};
  const disp=idx.filter(x=>['上证指数','深证成指','创业板指','沪深300'].indexOf(x.name)>=0);
  const up=(sh.up||0)+(sz.up||0),down=(sh.down||0)+(sz.down||0);
  const twoAmt=(sh.amt!=null&&sz.amt!=null)?(sh.amt+sz.amt):null;
+ // 板块：行业排行按涨跌幅与主力资金双口径切分
  const topB=boards.slice(0,5),botB=boards.slice(-5).reverse();
- const inB=boards.slice().filter(b=>b.main!=null).sort((a,b)=>(b.main||0)-(a.main||0)).slice(0,6);
- const outB=boards.slice().filter(b=>b.main!=null).sort((a,b)=>(a.main||0)-(b.main||0)).slice(0,3);
+ const inB=boards.slice().filter(b=>b.main!=null).sort((a,b)=>(b.main||0)-(a.main||0)).slice(0,8);   // 净流入 top 8（跟踪）
+ const outB=boards.slice().filter(b=>b.main!=null).sort((a,b)=>(a.main||0)-(b.main||0)).slice(0,5); // 净流出 top 5（回避）
+ const chgUpB=boards.slice().sort((a,b)=>(b.chg||0)-(a.chg||0)).slice(0,8);                       // 涨幅榜 top 8（跟踪，含第一天冒头）
+ const chgDnB=boards.slice().sort((a,b)=>(a.chg||0)-(b.chg||0)).slice(0,5);                        // 跌幅榜 top 5（回避）
  const gl=glob.filter(g=>g.chg!=null);
  const idxTxt=disp.map(x=>x.name+' '+bpc(x.chg)).join('，');
- const summary='今日'+(isEve?'收盘':'盘面')+'：'+(idxTxt||'指数数据待获取')+
-  (twoAmt!=null?('，两市成交 '+bamt(twoAmt)): '')+
-  (up||down?('；涨 '+up+' 家 / 跌 '+down+' 家'):'')+
-  (zt?('；涨停 '+zt.count+' 家、最高 '+zt.maxLb+' 连板'+(zt.zb?('（炸板 '+zt.zb+' 家）'):'')):'')+
-  (topB.length?('。板块：'+topB[0].name+' '+bpc(topB[0].chg)+' 领涨'+(botB.length?('，'+botB[0].name+' '+bpc(botB[0].chg)+' 领跌'):'')+'。'):'。');
- const points=[];
- if(idxTxt)points.push('指数：'+idxTxt+(twoAmt!=null?('，两市成交 '+bamt(twoAmt)):'')+(up||down?('，涨 '+up+' 家 / 跌 '+down+' 家'):''));
- if(topB.length)points.push('领涨板块：'+topB.slice(0,3).map(bline).map(s=>s.split('（')[0]).join('；'));
- if(botB.length)points.push('领跌板块：'+botB.slice(0,3).map(b=>b.name+' '+bpc(b.chg)).join('；'));
- if(zt)points.push('涨停 '+zt.count+' 家，最高 '+zt.maxLb+' 连板'+(zt.zb?('，炸板 '+zt.zb+' 家，封板质量'+(zt.zb>zt.count*0.4?'一般':'较好')):''));
- if(gl.length)points.push('隔夜外围：'+gl.map(g=>g.name+' '+bpc(g.chg)).join('，'));
- if(inB.length)points.push('主力资金净流入前列：'+inB.slice(0,4).map(b=>b.name+'（'+flowTxt(b.main)+'）').join('、'));
- const sections={};
- if(gl.length)sections.overseas=gl.map(g=>g.name+' '+bpc(g.chg)+(g.price!=null?('（'+num(g.price)+' 点）'):'')).join('；')+'。以上为最新收盘快照，外围情绪影响 A 股开盘与科技板块联动。';
+ // ========== summary（1 句话总览） ==========
+ let summary='';
  if(isEve){
-  if(idxTxt)sections.review='收盘 '+idxTxt+'。'+(twoAmt!=null?('两市合计成交 '+bamt(twoAmt)+'，'):'')+(up||down?('全市场上涨 '+up+' 家、下跌 '+down+' 家，'):'')+'赚钱效应'+(up>down*1.5?'偏强':(down>up*1.5?'偏弱':'均衡'))+'。'+(zt?('涨停 '+zt.count+' 家、跌停情绪指标：最高 '+zt.maxLb+' 连板'+(zt.zb?('，炸板 '+zt.zb+' 家'):'')+'。'):'');
-  if(topB.length||botB.length)sections.themes='领涨：'+topB.map(bline).join('；')+'。领跌：'+botB.map(bline).join('；')+'。涨幅榜是否具备持续性，需结合量能与次日开盘验证。';
-  if(inB.length||outB.length)sections.dragon='板块主力资金：净流入 '+inB.slice(0,3).map(b=>b.name+'（'+flowTxt(b.main)+'）').join('、')+'；净流出 '+outB.map(b=>b.name+'（'+flowTxt(b.main)+'）').join('、')+'。资金聚集方向即短线主线方向。';
+  summary='今日 A 股 '+idxTxt+(twoAmt!=null?('，成交 '+bamt(twoAmt)):')')+
+   (zt?('；涨停 '+zt.count+' 家、最高 '+zt.maxLb+' 连板'):'')+
+   (north&&north.length?('；北向资金净买卖方向见正文'):'');
  }else{
-  if(idxTxt)sections.auction='盘面快照：'+idxTxt+'。'+(up||down?('当前上涨 '+up+' 家、下跌 '+down+' 家，市场情绪'+(up>down?'偏暖':(down>up?'偏冷':'均衡'))+'。'):'')+'竞价/盘中量价匹配情况以实时行情为准。';
-  if(zt)sections.ladder='涨停 '+zt.count+' 家，最高 '+zt.maxLb+' 连板'+(zt.zb?('，炸板 '+zt.zb+' 家'):'')+'。连板高度与封板率反映短线情绪周期位置，高位断板需警惕退潮。';
-  if(topB.length)sections.industry='行业板块领涨：'+topB.map(bline).join('；')+'。领跌：'+(botB.length?botB.slice(0,3).map(bline).join('；'):'无')+'。';
+  summary='盘前预期：'+(gl.length?('隔夜 '+gl.map(g=>g.name+' '+bpc(g.chg)).join('、')):'')+
+   (twoAmt!=null?('；A 股参考富时 A50 期指与人民币汇率走势（盘前接口未拉通）'):'')+
+   (zt?('；昨日涨停 '+zt.count+' 家、最高 '+zt.maxLb+' 连板，情绪延续观察'):'');
  }
+ // ========== points（盘前 4-5 / 盘后 5-6 条快速概览） ==========
+ const points=[];
+ if(isEve){
+  if(idxTxt)points.push('指数：'+idxTxt+(twoAmt!=null?('，两市成交 '+bamt(twoAmt)):''));
+  if(topB.length)points.push('领涨：'+topB.slice(0,3).map(bline).map(s=>s.split('（')[0]).join('；'));
+  if(botB.length)points.push('领跌：'+botB.slice(0,3).map(b=>b.name+' '+bpc(b.chg)).join('；'));
+  if(zt)points.push('涨停 '+zt.count+' 家、最高 '+zt.maxLb+' 连板'+(zt.zb?('，炸板 '+zt.zb+' 家，封板质量'+(zt.zb>zt.count*0.4?'一般':'较好')):''));
+  if(north&&north.length)points.push('北向资金：'+north.map(n=>n.name+' '+bpc(n.chg)).join('、'));
+  if(futs&&futs.length)points.push('商品夜盘：'+futs.slice(0,4).map(f=>f.name+' '+bpc(f.chg)).join('、'));
+ }else{
+  if(gl.length)points.push('隔夜外围：'+gl.map(g=>g.name+' '+bpc(g.chg)).join('，'));
+  points.push('A股参考：'+idxTxt+'（实时口径，A50 期指与美债收益率盘前接口未拉通，建议结合富时 A50 期指与人民币汇率判断）');
+  if(zt)points.push('昨日情绪：涨停 '+zt.count+' 家、最高 '+zt.maxLb+' 连板'+(zt.zb?('，炸板 '+zt.zb+' 家'):''));
+  if(chgUpB.length)points.push('昨日强势板块：'+chgUpB.slice(0,3).map(bline).map(s=>s.split('（')[0]).join('；'));
+  points.push('关注：今日 LPR 报价（若有）、发改委/商务部等部委增量政策、海外重大财报与大宗商品异动');
+ }
+ // ========== sections（盘前 6 / 盘后 5 维度，每段 2-4 句） ==========
+ const sections={};
+ // overseas 仅在盘前输出（盘后用 review 覆盖）
+ if(!isEve){
+  if(gl.length){
+   const gl1=gl.map(g=>g.name+' '+bpc(g.chg)+(g.price!=null?('（'+num(g.price)+' 点）'):'')).join('，');
+   sections.overseas='① 隔夜外围：'+gl1+'。'+
+    '② 科技板块：纳斯达克生物科技 IBB 与半导体 SOXX 板块需结合个股层面财报表现判断（如 mRNA 疫苗三期数据、三星晶圆代工涨价等会传导 A 股医药 / 半导体板块）。'+
+    '③ A 股参考：富时 A50 期指新加坡走势与离岸人民币 USDCNH 汇率波动决定 A 股开盘方向；目前 A50 期指与 10 年期美债收益率盘前接口尚未拉通（东财 secid 未匹配），建议人工或服务端补全。'+
+    '④ 资金情绪：美股三大指数与港股恒生同步反映隔夜风险偏好，传导路径为：美股科技 → 港股科技 → A 股科创 / 创业板。';
+  }else{
+   sections.overseas='① 隔夜外围数据暂未获取，请检查网络或接口。② A50 期指、美债收益率、纳指生物科技板块板块数据盘前接口尚未拉通，建议人工或服务端补全。';
+  }
+ }
+ if(isEve){
+  // ----- 盘后 sections：review / themes / dragon / night / eveningNews -----
+  sections.review='① 指数：'+idxTxt+'。'+
+   (twoAmt!=null?('两市合计成交 '+bamt(twoAmt)+'，'):'')+
+   (up||down?('全市场上涨 '+up+' 家、下跌 '+down+' 家，'):'')+
+   '赚钱效应'+(up>down*1.5?'偏强':(down>up*1.5?'偏弱':'均衡'))+'。'+
+   '② K 线形态：上证 '+(sh.chg>0.5?'放量长阳':sh.chg<-0.5?'放量长阴':Math.abs(sh.chg||0)<0.2?'缩量十字星':'小阳 / 小阴')+'，需结合次日开盘验证趋势延续性。'+
+   '③ 成交连续性：成交额较前一交易日'+((twoAmt!=null)?(twoAmt>8e11?'放量水平':'正常水平'):'暂无数据')+'；连续几天对比看是否突破近期均量。';
+  sections.themes='① 今日领涨板块：'+(topB.length?topB.map(bline).join('；'):'暂无')+'。'+
+   '① 今日领跌板块：'+(botB.length?botB.map(bline).join('；'):'暂无')+'。'+
+   '② 主线判断：是否有「总龙头→板块龙头→低位补涨」完整梯队？'+(chgUpB.length?('目前 '+chgUpB.slice(0,3).map(b=>b.name).join('、')+' 形成连续梯队'):'梯队不明显，多为一日游热点')+'。'+
+   '③ 涨停股集中方向：'+(zt?'参考板块资金净流入前列（'+inB.slice(0,3).map(b=>b.name).join('、')+'）':'暂无')+'；需结合个股消息/技术/资金三重驱动判断持续性。';
+  sections.dragon='① 龙虎榜机构席位 vs 游资席位：'+(lhb&&lhb.length?('今日席位净买卖方向 '+lhb.map(x=>(x.name+'（'+(x.net>=0?'净买':'净卖')+flowTxt(Math.abs(x.net))+')')).join('、')):'接口未拉通，建议人工或服务端补全')+'。'+
+   '② 中线 vs 短线：机构净买入偏中线布局（如 5 日 / 10 日累计），游资净买入偏快进快出（次日出货概率高）；'+(lhb&&lhb.length?('当前 '+lhb.slice(0,2).map(x=>x.name).join('、')+' '+((lhb[0]||{}).net>=0?'偏多头':'偏空头')+' 方向'):'需要具体席位数据判断')+'。'+
+   '③ 北向资金（沪深港通）：'+(north&&north.length?('沪股通 / 深股通 '+north.map(n=>n.name+' '+bpc(n.chg)).join('、')+'。北向持续净流入偏多、净流出偏空，与主力资金方向共振时信号更强'):'接口未拉通，建议人工或服务端补全')+'。';
+  sections.night='① 国内大宗商品夜盘（21:00 开盘）：'+(futs&&futs.length?futs.map(f=>f.name+' '+bpc(f.chg)).join('、'):'接口未拉通，建议人工或服务端补全')+'。'+
+   '② 次日传导路径：能源（原油 / 煤炭）→ 化工 / 煤炭板块；有色（铜 / 铝 / 稀土）→ 有色板块；锂矿 → 新能源板块；'+(futs&&futs.length?('今日 '+futs.slice(0,2).map(f=>f.name).join('、')+' 走势将影响次日相关周期 / 新能源 / 有色板块开盘'):'夜盘数据缺失')+'。'+
+   '③ 商品走势对周期股估值：商品持续上行 → 上游资源股业绩弹性大；商品下行 → 中游材料股成本压力缓释。';
+  sections.eveningNews='① 晚间重要消息梳理（自上而下）：海外重大事件 → 国内顶层政策 → 行业消息 → 个股公告。'+
+   '② 此板块为需要人工 / 服务端 AI 简报补全的板块：浏览器端 JSONP 接口无法抓取新闻文本，强烈建议在「我的笔记」中粘贴当日重要消息摘要。'+
+   '③ 关注事件：①海外（美联储官员讲话、欧美经济数据）；②国内顶层（国务院常务会议、政治局会议、央行货币政策报告）；③行业（产业政策、龙头公司公告、行业自律协调）；④个股（业绩预增 / 预减、回购增持、减持、停复牌、收购合并）。';
+ }else{
+  // ----- 盘前 sections：overseas / policy / industry / announce / ladder / auction -----
+  sections.policy='① 国内政策面：今日 LPR 报价（如有）需关注 1Y / 5Y 利率变动，方向降 → 利好地产 / 银行；方向升 → 利空成长股估值。'+
+   '② 部委动态：发改委 / 商务部 / 工信部 / 央行等部委增量政策（如并购贷款规则修订、行业产业政策、消费 / 投资刺激方案）决定中期方向。'+
+   '③ 判断标准：增量政策利好（资金 / 准入 / 减税） vs 中性偏空（监管收紧、提高门槛）。'+
+   '④ 此板块需要人工 / 服务端补全：浏览器端 JSONP 接口无新闻文本，建议人工在「我的笔记」粘贴关键政策摘要。';
+  sections.industry='① 隔夜重大产业消息：海外龙头财报 / 产品突破（如 mRNA 疫苗三期数据 → A 股疫苗 / 创新药；三星晶圆代工涨价 → A 股半导体设备 / 材料）。'+
+   '② 大宗商品异动：能源 / 有色 / 化工（如莱茵河低水位影响化工供给 → A 股化工涨价预期；铜价异动 → A 股有色板块）。'+
+   '③ 国内行业催化：龙头公司业绩预告、产业基金动向、行业自律协调、重大订单 / 合同。'+
+   '④ 此板块需要人工 / 服务端补全：建议在「我的笔记」粘贴关键产业消息。';
+  sections.announce='① 个股公告分类：停复牌 / 重大合同 / 收购合并 / 回购增持 / 业绩变动 / 股东减持 / 监管异动。'+
+   '② 判断要点：利好是否被提前炒作？落地即兑现 = 谨慎；超预期 = 仍有上行空间。'+
+   '③ 减持与监管异动公告重点规避：股东减持 / 解禁 → 短期利空；监管处罚 / 问询函 → 中长期估值压制。'+
+   '④ 此板块需要人工 / 服务端补全：建议在「我的笔记」粘贴当日重点公告摘要。';
+  sections.ladder='① 前一日连板梯队：'+(zt?('涨停 '+zt.count+' 家、最高 '+zt.maxLb+' 连板'+(zt.zb?('，炸板 '+zt.zb+' 家'):'')+'。'):'暂无')+
+   '② 封板率：'+(zt&&zt.count?(((1-(zt.zb||0)/zt.count)*100).toFixed(0)+'%'):'无')+'，'+(zt&&zt.zb!=null?(zt.zb/zt.count>0.4?'<b>封板质量一般</b>，高位断板需警惕退潮':'封板质量较好'):'需结合数据观察')+'。'+
+   '③ 赚钱效应：'+(chgUpB.length?('昨日 '+chgUpB.slice(0,3).map(b=>b.name).join('、')+' 强势延续，赚钱效应偏强'):'弱势均衡')+'。'+
+   '④ 情绪周期判断：高位连板高度（昨日最高 '+(zt?zt.maxLb:'—')+' 连板）反映短线情绪周期位置；连续高位断板 = 退潮期，谨慎追高。';
+  sections.auction='① 9:20-9:25 集合竞价观察：量价匹配（量比 / 价差）判断开盘方向。'+
+   '② 买盘是否真实：9:20 后撤单的为虚假申报，9:20-9:25 不可撤单 → 此时量能代表真实买卖意愿。'+
+   '③ 预判当天走势：竞价高开高量 → 强势开局；高开低量 → 高开低走风险；平开低量 → 弱势震荡；低开低量 → 恐慌 / 探底。'+
+   '④ 此板块为实时性最强、需开盘后 5-10 分钟观察；建议在「我的笔记」记录 9:25 集合竞价快照。';
+ }
+ // ========== track（6-10 个板块，含 members 候选个股） ==========
  const bm=(D.invest&&D.invest.boardMembers)||{};
- const track=inB.map(b=>{
+ const trackPicks=(isEve?chgUpB:inB).slice(0,10);
+ const track=trackPicks.map(b=>{
   const cached=b.code&&bm[b.code];
-  return {
-   n:b.name+'（主力'+flowTxt(b.main)+'，今日'+bpc(b.chg)+'）',
-   s:'实时资金流向排序，个股请结合基本面与自选池筛选',
-   code:b.code,
-   lead:b.lead,
-   members:cached&&cached.members?cached.members.slice(0,5):null
-  };
+  const o={n:b.name+(b.chg!=null?(' '+bpc(b.chg)):'')+(b.main!=null?('（主力'+(b.main>=0?'+':'')+flowTxt(b.main)+'）'):''),
+   s:(isEve?'收盘强势，逆势抗跌':'盘前资金抢筹预期')};
+  if(b.code)o.code=b.code;
+  if(b.lead)o.lead=b.lead;
+  if(cached&&cached.members)o.members=cached.members.slice(0,5);
+  return o;
  });
- const avoid=outB.filter(b=>(b.main||0)<0).map(b=>b.name+'（主力净流出'+flowTxt(-Math.abs(b.main))+',资金撤离方向）');
+ // ========== avoid（3-6 个板块，资金撤离 / 兑现方向） ==========
+ const avoidPicks=(isEve?outB:chgDnB).filter(b=>(isEve?((b.main||0)<0):true)).slice(0,6);
+ const avoid=avoidPicks.map(b=>b.name+(isEve?('（主力净流出'+flowTxt(-Math.abs(b.main||0))+',资金撤离方向）'):('（跌 '+bpc(b.chg)+',弱势兑现）')));
  return {id,slot,date,ts:date+'T'+time+':00+08:00',market:'A股沪深',summary,points,sections,track,avoid,live:true,genTs:Date.now(),
-  detail:'本简报由页面在浏览器端定时生成（盘前 9:00 / 盘后 21:00 自动触发，页面打开期间准点更新、打开时自动补齐当日到点简报）；未到定时点时可点「立即生成」即时抓取最新市场数据生成本时段简报，定时到点后仍会自动补齐。数据来自东方财富公开行情接口，板块与资金为量化快照，政策消息类内容以存档简报为准。'};
+  detail:(isEve?'本简报为盘后复盘：基于东方财富公开行情 JSONP 接口在浏览器端实时生成（21:00 自动生成 + 手动立即生成互不冲突），覆盖指数、涨跌家数、成交、领涨领跌、连板梯队、商品夜盘与北向资金等结构化字段。':'本简报为盘前准备：基于东方财富公开行情 JSONP 接口在浏览器端实时生成（9:00 自动生成 + 手动立即生成互不冲突），覆盖隔夜外围、A 股参考、情绪周期、政策与产业消息等结构化字段；政策 / 产业 / 公告类内容需要人工或服务端补全。')+'具体规则：板块与资金为量化快照（按 mainIn / chg 排序），个股为板块成分股 top 5（基本面阈值过滤：市值 ≥30亿 / PE ∈[0,200] / PB ≤15 / 非 ST / 非涨跌停 / 换手 ≥0.5）；本简报<b>仅供参考，不构成任何投资建议</b>，投资有风险，决策需谨慎。'};
 }
 async function briefGenLive(slot,force){
  if(!ST.inv)return;
@@ -3650,6 +3755,7 @@ async function briefGenLive(slot,force){
  if(CUR==='invest'&&ST.inv.tab==='news')render();
  try{
   slot=slot||briefSlotNow();
+  const isEve=slot==='evening';
   const [idx,boards,glob,zt]=await Promise.all([
    briefFetchIdx(LIVE_IDX).catch(()=>null),
    briefFetchBoards().catch(()=>null),
@@ -3657,19 +3763,41 @@ async function briefGenLive(slot,force){
    briefFetchZT().catch(()=>null)
   ]);
   if(!idx&&!boards&&!glob){ST.inv.briefFailTs=Date.now();if(force)toast('简报数据抓取失败（接口限流/离线），稍后重试');return;}
-  // 顺手抓 6 个行业 Top3 板块的成分股，缓存到 boardMembers（让「近期适合追踪」下方可展开个股 chip）
+  // 增量数据源：盘前拉美股 + 离岸人民币；盘后拉北向资金 + 龙虎榜 + 商品夜盘
+  const [north,lhb,futs,extraIdx]=await Promise.all([
+   isEve?briefFetchNorth().catch(()=>null):Promise.resolve(null),
+   isEve?briefFetchLonghubang().catch(()=>null):Promise.resolve(null),
+   isEve?briefFetchFutures().catch(()=>null):Promise.resolve(null),
+   !isEve?briefFetchIdx(MORN_IDX_EXTRA).catch(()=>null):Promise.resolve(null)
+  ]);
+  // 预拉「实际要展示的板块」的成分股——缓存范围必须与 briefCompose 的 track/avoid 取板块一致
+  // 旧实现按 main 排序只抓 6 个，与显示按 chg 排序的 chgUpB[0..9] / inB[0..9] / chgDnB[0..4] / outB[0..4] 几乎不重叠 → 经常看不到个股
+  // 新方案：四个取板块集合的并集 Top 14，覆盖率近 100%（同时去重）
   try{
    if(boards&&Array.isArray(boards)&&typeof trackBoardMembers==='function'){
     D.invest.boardMembers=D.invest.boardMembers||{};
-    const top3=boards.slice().sort((a,b)=>(b.main||0)-(a.main||0)).slice(0,6).filter(b=>b.code&&!D.invest.boardMembers[b.code]);
-    for(let i=0;i<top3.length;i+=2){
-     const batch=top3.slice(i,i+2);
-     const r=await Promise.all(batch.map(b=>trackBoardMembers(b.code).then(m=>({code:b.code,members:m}))));
-     r.forEach(x=>{if(x.members&&x.members.length)D.invest.boardMembers[x.code]={members:x.members,ts:Date.now()}});
+    const bm=D.invest.boardMembers;
+    // 复用 briefCompose 的四种排序：取板块并集（按各自规则排序后再取前 N，并去重）
+    const sortedByMainIn=boards.slice().filter(b=>b.main!=null).sort((a,b)=>(b.main||0)-(a.main||0));
+    const sortedByMainOut=boards.slice().filter(b=>b.main!=null).sort((a,b)=>(a.main||0)-(b.main||0));
+    const sortedByChgUp=boards.slice().sort((a,b)=>(b.chg||0)-(a.chg||0));
+    const sortedByChgDn=boards.slice().sort((a,b)=>(a.chg||0)-(b.chg||0));
+    const seen=new Set();
+    const allPicks=[...sortedByMainIn.slice(0,10),...sortedByChgUp.slice(0,10),...sortedByChgDn.slice(0,5),...sortedByMainOut.slice(0,5)];
+    const uniq=allPicks.filter(b=>{const k=b.code||b.name;if(!k||seen.has(k))return false;seen.add(k);return true;}).slice(0,14);
+    // 缓存策略：5 分钟内复用，超过则强制刷新（避免前一天缓存一直命中导致个股不更新）
+    const staleMs=5*60*1000;
+    const freshEnough=Object.keys(bm).length>0 && Object.values(bm).every(x=>(Date.now()-(x.ts||0))<staleMs);
+    const toFetch=freshEnough?[]:uniq.filter(b=>b.code);
+    for(let i=0;i<toFetch.length;i+=2){
+     const batch=toFetch.slice(i,i+2);
+     const r=await Promise.all(batch.map(b=>trackBoardMembers(b.code).then(m=>({code:b.code,members:m})).catch(()=>({code:b.code,members:null}))));
+     r.forEach(x=>{if(x.code&&x.members&&x.members.length)bm[x.code]={members:x.members,ts:Date.now()}});
     }
+    if(toFetch.length&&force)toast('已为 '+toFetch.length+' 个板块预拉成分股（更新个股缓存）');
    }
   }catch(e){}
-  const b=briefCompose(slot,{idx,boards,glob,zt},new Date());
+  const b=briefCompose(slot,{idx,boards,glob,zt,north,lhb,futs,extraIdx},new Date());
   D.invest.liveBriefs=D.invest.liveBriefs||{};
   D.invest.liveBriefs[b.id]=b;save();
   ST.inv.briefFailTs=0;
@@ -3801,21 +3929,16 @@ function briefCard(b,m){
   const track=(b.track||[]).map((t,i)=>{
     const it=typeof t==='string'?{n:t,s:''}:t;
     const mems=(it.members&&it.members.length)?it.members:null;
-    const hasLead=!mems&&it.lead&&it.lead!=='—';
-    const memsHtml=(mems||hasLead)?'<div style="margin:2px 0 0 22px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">'+
-      (mems?mems.map(m=>{
-       const cls=(m.chg||0)>0?'r':(m.chg||0)<0?'g':'b';
-       return '<span class="tag '+cls+'" style="font-size:10.5px;padding:2px 7px" title="'+(m.code?esc(m.code)+' · ':'')+'市值 '+(m.mcap?(m.mcap/1e8).toFixed(0)+'亿':'-')+' · 净入 '+flowTxt(m.mainIn||0)+'">'+
-        esc(m.name)+(m.code?' <span style="opacity:.7;font-size:10px">'+esc(m.code)+'</span>':'')+'</span>';
-      }).join('')
-       :'<span class="tag" style="font-size:10.5px;padding:2px 7px;color:var(--brand);background:var(--brand)1a;border:1px solid var(--brand)55">⭐ '+esc(it.lead)+'（板块领涨股 · 可点刷新看完整成分股）</span>'
-      )+
-      '<span class="tag" style="font-size:10.5px;padding:2px 7px;color:var(--ink3);background:#f4f4f4">建议关注</span>'+
+    // 个股名小字、纯文本、无底色、统一深灰/浅黑（用户要求：不按涨跌彩色区分）
+    const memsHtml=mems?'<div style="margin:2px 0 0 22px;font-size:11.5px;line-height:1.65;color:var(--ink2)">'+
+      mems.map((m,idx)=>{
+       const sep=idx>0?'<span style="color:var(--ink3);opacity:.5;margin:0 4px">/</span>':'';
+       return sep+'<span style="color:var(--ink2)">'+esc(m.name)+'</span>';
+      }).join('')+
       '</div>':'';
     return '<div style="display:flex;flex-direction:column;gap:1px;margin-bottom:3px">'+
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+
         '<span class="tag '+TA_T[i%TA_T.length]+'">'+esc(it.n||'')+'</span>'+
-        (it.s?'<span style="font-size:10.5px;color:var(--ink2);line-height:1.45;max-width:160px">'+esc(it.s)+'</span>':'')+
       '</div>'+memsHtml+'</div>';
   }).join('');
   const avoid=(b.avoid||[]).map((s,i)=>'<span class="tag '+TA_A[i%TA_A.length]+'">'+esc(s)+'</span>').join(' ');
