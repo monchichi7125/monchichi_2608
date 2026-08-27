@@ -75,6 +75,8 @@ align-items:center;justify-content:center;cursor:pointer;flex:none}
 #ttl{font-size:19px;font-weight:700;letter-spacing:-.3px;flex:1;min-width:0;
 overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .topbtns{display:flex;gap:7px;flex:none}
+.bell{position:relative}
+.bell .bd{position:absolute;top:-3px;right:-3px;min-width:16px;height:16px;border-radius:9px;background:var(--red);color:#fff;font-size:9.5px;font-weight:800;display:flex;align-items:center;justify-content:center;padding:0 4px;line-height:1;border:2px solid var(--bg)}
 .wrap{padding:20px 26px;max-width:1520px}
 
 /* ============ 通用组件 ============ */
@@ -316,6 +318,7 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
 
 /* 移动端 */
 @media(max-width:1080px){.calgrid{grid-template-columns:1fr}.g4{grid-template-columns:repeat(2,1fr)}
+.g3:not(.keep3){grid-template-columns:repeat(2,1fr)}
 .yeargrid{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:900px){
 :root{--nav:270px}
@@ -399,6 +402,11 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
     </div>
     <div id="ttl">日程日历</div>
     <div class="topbtns">
+      <button class="btn sm bell" onclick="openNotify()" title="通知中心（今天要处理）">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2C2622" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+        <span class="hidem">通知</span>
+        <span class="bd" id="bellbd" style="display:none"></span>
+      </button>
       <button class="btn sm" onclick="doExport()" title="导出 JSON 备份">
         <svg width="14" height="14" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
         <span class="hidem">导出</span>
@@ -546,11 +554,16 @@ const DEF={
 function deepMerge(t,s){for(const k in s){if(!(k in t))t[k]=s[k];else if(s[k]&&typeof s[k]==='object'&&!Array.isArray(s[k])&&typeof t[k]==='object'&&!Array.isArray(t[k]))deepMerge(t[k],s[k])}return t}
 let D=JSON.parse(JSON.stringify(DEF));
 function load(){try{const r=localStorage.getItem(KEY);if(r){D=deepMerge(JSON.parse(r),JSON.parse(JSON.stringify(DEF)));if(D.settings&&D.settings.cloud)delete D.settings.cloud}}catch(e){console.warn('load fail',e)}}
-let _st;
+let _st,_raf=null;
+function scheduleRender(){
+ if(_raf)return;
+ if(typeof requestAnimationFrame!=='function'){render();return}
+ _raf=requestAnimationFrame(()=>{_raf=null;render()});
+}
 function save(silent){
  D.updatedAt=Date.now();
  try{localStorage.setItem(KEY,JSON.stringify(D))}catch(e){toast('保存失败：本地存储已满，请导出备份后清理');return}
- if(!silent)render();
+ if(!silent)scheduleRender();
  checkBackupTip();
 }
 function countAll(){let c=0;const w=x=>{if(Array.isArray(x))c+=x.length;else if(x&&typeof x==='object')for(const k in x)if(k!=='settings')w(x[k])};for(const k in D)if(k!=='settings')w(D[k]);return c}
@@ -702,7 +715,10 @@ function imgViewData(src){openM('图片预览','<div style="text-align:center"><
 function imgView(tripId){const t=(D.fun.trips||[]).find(x=>x.id===tripId);if(!t||!t.img)return;imgViewData(t.img)}
 
 /* ==================== 「今天要处理」聚合 ==================== */
+let _ctCache={date:'',ver:-1,val:[]};
+function ctInvalidate(){_ctCache={date:'',ver:-1,val:[]}}   // 绕过 save() 直接改 D 后调用（测试/调试钩子）
 function collectToday(){
+ if(_ctCache.date===TODAY&&_ctCache.ver===D.updatedAt)return _ctCache.val;
  const out=[];
  // 逾期 + 今日待办（含周期重复）
  D.todos.forEach(t=>{
@@ -740,6 +756,7 @@ function collectToday(){
  });
  hookToday(out);
  out.sort((a,b)=>a.pri-b.pri);
+ _ctCache={date:TODAY,ver:D.updatedAt,val:out};
  return out;
 }
 function hookToday(out){/* 各模块补充，见后 */
@@ -808,7 +825,7 @@ function renderToday(){
  (x.ig?'<button class="btn sm gh" onclick="todayIgnoreGoods(\''+x.id+'\')">忽略</button>':'')+
  '</div></div>').join('')+'</div>';
 }
-function todayIgnoreGoods(id){if(!id)return;(D.digital.ignoreGoods=D.digital.ignoreGoods||[]);if(!D.digital.ignoreGoods.includes(id))D.digital.ignoreGoods.push(id);save();renderToday();toast('已忽略，不再出现在「今天要处理」');}
+function todayIgnoreGoods(id){if(!id)return;(D.digital.ignoreGoods=D.digital.ignoreGoods||[]);if(!D.digital.ignoreGoods.includes(id))D.digital.ignoreGoods.push(id);save();toast('已忽略，不再出现在「今天要处理」');}
 
 /* ==================== 日程 / 待办 / 签到 / 倒计时 逻辑 ==================== */
 function eventsOn(date){
@@ -933,21 +950,47 @@ function go(k){
  render();
 }
 function renderNav(){
+ const list=collectToday();
  $('#navlist').innerHTML=MODS.map(m=>{
-  const n=badge(m.k);
+  const n=(list.filter(x=>x.mod===m.k&&x.ov).length)||'';
   return '<div class="navi'+(m.k===CUR?' on':'')+'" onclick="go(\''+m.k+'\')">'+ic(m.i,17)+'<span>'+m.n+'</span>'+(n?'<span class="dot">'+n+'</span>':'')+'</div>';
  }).join('');
 }
-function badge(k){
- const l=collectToday();
- return l.filter(x=>x.mod===k&&x.ov).length||'';
-}
 function openNav(){$('#nav').classList.add('open');$('#backdrop').classList.add('on')}
 function closeNav(){$('#nav').classList.remove('open');$('#backdrop').classList.remove('on')}
+
+/* ==================== 通知中心（跨模块「今天要处理」汇总） ==================== */
+function modName(k){const m=MODS.find(x=>x.k===k);return m?m.n:'其他'}
+function renderBell(){
+ const bd=$('#bellbd');if(!bd)return;
+ const n=collectToday().length;
+ if(n>0){bd.style.display='';bd.textContent=n>99?'99+':n}else{bd.style.display='none'}
+}
+function openNotify(){
+ const list=collectToday();
+ const ov=list.filter(x=>x.ov).length;
+ const head='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'+
+  '<span class="tag o">'+list.length+' 项待处理</span>'+(ov?'<span class="tag r">'+ov+' 项逾期</span>':'<span class="tag g">无逾期</span>')+
+  '<span class="sub" style="margin-left:auto;font-size:11.5px">'+TODAY+' '+wd(TODAY)+'</span></div>';
+ const body=(list.length?'<div class="tdl" style="max-height:56vh;overflow:auto">'+list.map(x=>
+  '<div class="tdi'+(x.ov?' ovd':'')+'"><div class="gr" style="min-width:0;cursor:pointer" onclick="closeM();go(\''+x.mod+'\')">'+
+  '<div class="t1">'+esc(x.t)+'</div><div class="t2">'+esc(x.s)+' · '+esc(modName(x.mod))+'</div></div>'+
+  '<div style="display:flex;gap:6px;flex:none;align-items:center">'+
+  '<button class="btn sm'+(x.ov?' dg':'')+'" onclick="closeM();'+x.fn+'">'+esc(x.act)+'</button>'+
+  '</div></div>').join('')+'</div>':'<div class="empty">'+ic('check',28)+'今天没有要处理的事</div>')+
+  '<div style="font-size:11px;color:var(--ink3);line-height:1.6;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">汇总全部模块的今日待办与逾期事项（与侧边栏各模块红点同源）；点条目跳转对应模块，点右侧按钮直接处理。</div>';
+ openM('通知中心',head+body,false,560);
+}
+
+/* ==================== 通用卡片头助手（统一组件规范） ==================== */
+function chH(icon,title,sub,right){
+ return '<div class="ch"><h3>'+ic(icon,15)+title+'</h3>'+(sub?'<span class="sub">'+sub+'</span>':'')+'<div class="sp"></div>'+(right||'')+'</div>';
+}
+
 function render(){
  const m=MODS.find(x=>x.k===CUR)||MODS[0];
  $('#ttl').textContent=m.n;
- renderToday();renderNav();
+ renderToday();renderNav();renderBell();
  const fn=window['R_'+CUR];
  $('#page').innerHTML=fn?fn():'<div class="card"><div class="empty">'+ic('box',34)+'模块建设中</div></div>';
  if(window['A_'+CUR])window['A_'+CUR]();
@@ -1728,7 +1771,7 @@ function finToggleSel(id){ST.fin.sel=ST.fin.sel||[];const i=ST.fin.sel.indexOf(i
 function finToggleEdit(){ST.fin.edit=!ST.fin.edit;if(!ST.fin.edit)ST.fin.sel=[];render();}
 function finSelAll(on){const vis=window.__finVis||[];ST.fin.sel=on?vis.slice():[];render();}
 function finSelClear(){ST.fin.sel=[];render();}
-function finDelSel(){const sel=ST.fin.sel||[];if(!sel.length){toast('请先勾选要删除的账目');return}const n=sel.length;confirmM('删除选中的 '+n+' 笔账目','确定删除选中的 <b>'+n+'</b> 笔账目吗？此操作不可撤销。',()=>{const s=new Set(sel);D.finance.bills=D.finance.bills.filter(b=>!s.has(b.id));ST.fin.sel=[];save();render();toast('已删除 '+n+' 笔');},'删除');}
+function finDelSel(){const sel=ST.fin.sel||[];if(!sel.length){toast('请先勾选要删除的账目');return}const n=sel.length;confirmM('删除选中的 '+n+' 笔账目','确定删除选中的 <b>'+n+'</b> 笔账目吗？此操作不可撤销。',()=>{const s=new Set(sel);D.finance.bills=D.finance.bills.filter(b=>!s.has(b.id));ST.fin.sel=[];save();toast('已删除 '+n+' 笔');},'删除');}
 /* --- 旅行 / 养车 / 保险 汇总 --- */
 function travelSummary(){
  const L=(D.finance.bills||[]).filter(b=>b.book==='travel'&&b.type==='out');
@@ -2000,8 +2043,8 @@ function R_invest(){
 function invStockTab(){
  const sub=ST.inv.sub||'list';
  const tab=(k,n)=>'<div class="tab'+(sub===k?' on':'')+'" onclick="ST.inv.sub=\''+k+'\';render()">'+n+'</div>';
- const bar='<div class="tabs" style="margin-bottom:14px;max-width:560px">'+tab('list','自选股')+tab('pat','技术形态')+tab('flow','资金关注')+tab('suggest','今日操作建议')+'</div>';
- return bar+(sub==='flow'?invFlow():sub==='pat'?invPat():sub==='suggest'?invSuggest():invStock());
+ const bar='<div class="tabs" style="margin-bottom:14px;max-width:680px;flex-wrap:wrap">'+tab('list','自选股')+tab('pat','技术形态')+tab('flow','资金关注')+tab('track','跟踪筛选')+tab('suggest','今日操作建议')+'</div>';
+ return bar+(sub==='flow'?invFlow():sub==='pat'?invPat():sub==='track'?invTrack():sub==='suggest'?invSuggest():invStock());
 }
 function A_invest(){
  if(ST.inv.tab==='stock'&&D.invest.stocks.length){
@@ -2013,12 +2056,16 @@ function A_invest(){
 /* --- 自选股 --- */
 function invStock(){
  const S=D.invest.stocks;
+ const m=curMkt();
+ const mcol=m.regime==='strong'?'var(--red)':m.regime==='weak'?'var(--green)':'var(--ink2)';
+ const mchip='<span style="background:'+mcol+'14;color:'+mcol+';border:1px solid '+mcol+'40;font-weight:600;padding:1px 7px;border-radius:7px;font-size:11px">环境·'+m.label+'</span>';
  const q=(ST.inv.sq||'').trim().toLowerCase();
  const list=q?S.filter(s=>(s.note||'').toLowerCase().includes(q)):S;
  const upd=window._qtTime?new Date(window._qtTime).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'未刷新';
  return '<div class="card"><div class="invSticky"><div class="ch"><h3>'+ic('chart',15)+'自选股看板</h3>'+
- '<span class="sub">交易时段每 30 分钟自动刷新 · 上次 '+upd+(isTradeTime()?' · <span style="color:var(--green)">开市中</span>':' · 休市')+'</span>'+
- '<div class="sp"></div><button class="btn sm" onclick="quoteFetch()">'+ic('refresh',14)+'刷新</button>'+
+ '<span class="sub">交易时段每 30 分钟自动刷新 · 上次 '+upd+(isTradeTime()?' · <span style="color:var(--green)">开市中</span>':' · 休市')+' · '+mchip+'</span>'+
+ '<div class="sp"></div><button class="btn sm" onclick="stkModelInfo()">'+ic('bulb',14)+'逻辑</button>'+
+ '<button class="btn sm" onclick="quoteFetch()">'+ic('refresh',14)+'刷新</button>'+
  '<button class="btn sm pri" onclick="stkAdd()">'+ic('plus',14)+'加自选</button></div>'+
 '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0 2px">'+
 '<input id="sqinp" class="inp" style="flex:1;height:34px" placeholder="按备注筛选，如 定投 / 止盈 / 网格" value="'+esc(ST.inv.sq||'')+'" oninput="if(event.isComposing||event.keyCode===229){clearTimeout(window._sq);return;}ST.inv.sq=this.value;clearTimeout(window._sq);window._sq=setTimeout(render,300)" oncompositionend="ST.inv.sq=this.value;clearTimeout(window._sq);window._sq=setTimeout(render,300)" onkeydown="if(event.keyCode===13&&!event.isComposing){event.preventDefault();clearTimeout(window._sq);render();}">'+
@@ -2028,7 +2075,7 @@ function invStock(){
  (S.length?(list.length?'<div class="lst">'+list.map(s=>{
   const p=s.price,c=s.chg;
   const cls=c==null?'':c>0?'pos':c<0?'neg':'';
-  const adv=stkAdvice(s,s.k);
+  const adv=stkAdvice(s,s.k,curMkt());
   const flowTag=s.flow&&s.flow.net!=null?'<span style="font-size:10.5px;color:'+(s.flow.net>=0?'var(--red)':'var(--green)')+'">主力'+flowTxt(s.flow.net)+'</span>':'';
   return '<div class="li"><div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer" onclick="stkDetail(\''+s.id+'\')">'+
   '<div style="width:66px;flex:none;text-align:center"><div class="t1" style="font-size:12px">'+esc(s.code)+'</div>'+
@@ -2068,16 +2115,23 @@ async function quoteFetch(silent){
  if(!uniq.length){if(!silent)toast('还没有股票');return}
  if(!silent)toast('正在获取行情…');
  const base='https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&np=1&secids='+
-  uniq.map(secid).join(',')+'&fields=f2,f3,f12,f14,f62&ut=fa5fd1943c7b386f172d6893dbfba10b';
+  uniq.map(secid).join(',')+'&fields=f2,f3,f12,f14,f62,f6,f8,f60,f116,f117,f15,f16,f18&ut=fa5fd1943c7b386f172d6893dbfba10b';
  const apply=()=>{window._qtTime=Date.now();save();if(CUR==='invest')render()};
  const parse=j=>{
   const arr=(j&&j.data&&j.data.diff)||[];const map={};
-  (Array.isArray(arr)?arr:Object.values(arr)).forEach(x=>{map[String(x.f12)]={p:x.f2,c:x.f3,n:x.f14}});
+  (Array.isArray(arr)?arr:Object.values(arr)).forEach(x=>{map[String(x.f12)]={p:x.f2,c:x.f3,n:x.f14,f62:x.f62,f6:x.f6,f8:x.f8,f60:x.f60,f116:x.f116,f117:x.f117,f15:x.f15,f16:x.f16,f18:x.f18}});
   let n=0;
   D.invest.stocks.forEach(s=>{const q=map[s.code.replace(/^(SH|SZ|BJ)/i,'')];
-   if(q&&q.p!=='-'&&q.p!=null){s.price=+q.p;s.chg=+q.c;s.manual=false;if(!s.name||s.name===s.code)s.name=q.n;n++}});
-  D.invest.stocks.forEach(s=>{const q=map[s.code.replace(/^(SH|SZ|BJ)/i,'')];
-   if(q&&q.f62!==undefined&&q.f62!=='-'&&q.f62!=null){s.flow=s.flow||{};s.flow.net=+q.f62}});
+   if(q&&q.p!=='-'&&q.p!=null){s.price=+q.p;s.chg=+q.c;s.manual=false;if(!s.name||s.name===s.code)s.name=q.n;
+    if(q.f62!==undefined&&q.f62!=='-'&&q.f62!=null){s.flow=s.flow||{};s.flow.net=+q.f62;if(q.f6&&q.f6!=='-'&&+q.f6)s.flow.ratio=+q.f62/(+q.f6)*100;}
+    if(q.f8!==undefined&&q.f8!=='-'&&q.f8!=null)s.turn=+q.f8;
+    if(q.f60!==undefined&&q.f60!=='-'&&q.f60!=null)s.mcap=+q.f60;
+    if(q.f116!==undefined&&q.f116!=='-'&&q.f116!=null)s.pe=+q.f116;
+    if(q.f117!==undefined&&q.f117!=='-'&&q.f117!=null)s.pb=+q.f117;
+    if(q.f15!==undefined&&q.f15!=='-'&&q.f15!=null)s.high=+q.f15;
+    if(q.f16!==undefined&&q.f16!=='-'&&q.f16!=null)s.low=+q.f16;
+    if(q.f18!==undefined&&q.f18!=='-'&&q.f18!=null)s.preClose=+q.f18;
+    n++}});
   (D.invest.holds||[]).forEach(h=>{const q=map[h.code.replace(/^(SH|SZ|BJ)/i,'')];
    if(q&&q.p!=='-'&&q.p!=null){h.cur=+q.p}});
   return n;
@@ -2085,7 +2139,7 @@ async function quoteFetch(silent){
  // 1) 先试 fetch（部署在允许 CORS 的环境 / 同源代理时可用）
  try{
   const r=await fetch(base+'&_='+Date.now());const j=await r.json();
-  if(j&&j.data){const n=parse(j);apply();if(!silent)toast(n?('已更新 '+n+' 只股票行情'):'接口返回为空，可手动填价格');await klineEnrich();save();if(CUR==='invest')render();return}
+  if(j&&j.data){const n=parse(j);apply();if(!silent)toast(n?('已更新 '+n+' 只股票行情'):'接口返回为空，可手动填价格');await klineEnrich();refreshMkt();save();if(CUR==='invest')render();return}
  }catch(e){/* 跨域/被拦，走 JSONP 兜底 */}
  // 2) JSONP 兜底：脚本注入不受跨域限制，静态站点也能抓行情
  if(typeof document==='undefined')return;
@@ -2094,7 +2148,7 @@ async function quoteFetch(silent){
   const sc=document.createElement('script');let done=false;
   const clean=()=>{try{delete window[cb]}catch(e){}try{sc.parentNode&&sc.parentNode.removeChild(sc)}catch(e){}};
   const ok=async j=>{if(done)return;done=true;try{const n=parse(j);apply();
-    if(!silent)toast(n?('已更新 '+n+' 只股票行情'):'接口返回为空，可手动填价格');await klineEnrich();save();if(CUR==='invest')render();
+    if(!silent)toast(n?('已更新 '+n+' 只股票行情'):'接口返回为空，可手动填价格');await klineEnrich();refreshMkt();save();if(CUR==='invest')render();
    }catch(e){if(!silent)toast('行情解析失败，可手动填价格')}clean();resolve()};
   const fail=()=>{if(done)return;done=true;
     if(!silent)toast('行情获取失败（网络/跨域被拦）——可在编辑里手动填价格');clean();resolve()};
@@ -2126,7 +2180,8 @@ async function klineEnrich(){
   return jsonpGet(kurl,5000).then(kj=>{
    const kl=kj&&kj.data&&kj.data.klines;if(!kl||!kl.length)return;
    const k=computeKline(kl);if(!k)return;
-   s.k={golden:k.golden,above20:k.above20,trend5:k.trend5,volRatio:k.volRatio,price:k.price,m5:k.m5,m20:k.m20,ts:Date.now()};
+   s.k={golden:k.golden,above20:k.above20,trend5:k.trend5,trend20:k.trend20,volRatio:k.volRatio,price:k.price,
+     m5:k.m5,m10:k.m10,m20:k.m20,m60:k.m60,bull:k.bull,above60:k.above60,low20:k.low20,high20:k.high20,amt:k.amt,ts:Date.now()};
   }).catch(()=>{});
  });
  await Promise.all(jobs);
@@ -2141,39 +2196,164 @@ function flowTxt(y){
 function computeKline(klines){
  if(!klines||!klines.length)return null;
  const arr=klines.map(r=>{const p=r.split(',');return {d:p[0],o:+p[1],c:+p[2],h:+p[3],l:+p[4],v:+p[5],amt:+p[6]};});
- const N=arr.length,closes=arr.map(x=>x.c),vols=arr.map(x=>x.v);
+ const N=arr.length,closes=arr.map(x=>x.c),vols=arr.map(x=>x.v),lows=arr.map(x=>x.l);
  const ma=(src,n)=>{const out=[];for(let i=0;i<N;i++){if(i<n-1){out.push(null);continue}let s=0;for(let j=i-n+1;j<=i;j++)s+=src[j];out.push(s/n)}return out};
- const ma5=ma(closes,5),ma20=ma(closes,20);
- const price=arr[N-1].c,m5=ma5[N-1],m20=ma20[N-1];
+ const ma5=ma(closes,5),ma10=ma(closes,10),ma20=ma(closes,20),ma60=ma(closes,60);
+ const price=arr[N-1].c,m5=ma5[N-1],m10=ma10[N-1],m20=ma20[N-1],m60=ma60[N-1];
  const c5=closes[N-6>=0?N-6:0],c20=closes[N-21>=0?N-21:0];
  const trend5=c5? (price/c5-1)*100:0, trend20=c20? (price/c20-1)*100:0;
  const v5=vols.slice(N-5).reduce((a,b)=>a+b,0)/5;
  const v20=vols.slice(Math.max(0,N-20),N-5).reduce((a,b)=>a+b,0)/Math.max(1,N-5);
- return {arr,ma5,ma20,N,price,m5,m20,golden:(m5!=null&&m20!=null&&m5>m20),
-   above20:(m20!=null&&price>m20),trend5,trend20,volRatio:v20?v5/v20:1,amt:arr[N-1].amt};
+ const low20=Math.min.apply(null,lows.slice(Math.max(0,N-20)));   // 近20日最低收盘（支撑参考）
+ const high20=Math.max.apply(null,arr.map(x=>x.h).slice(Math.max(0,N-20))); // 近20日最高（压力参考）
+ const bull=(m5!=null&&m10!=null&&m20!=null&&m60!=null&&m5>m10&&m10>m20&&m20>m60); // 均线完全多头
+ return {arr,ma5,ma10,ma20,ma60,N,price,m5,m10,m20,m60,low20,high20,bull,golden:(m5!=null&&m20!=null&&m5>m20),
+   above20:(m20!=null&&price>m20),above60:(m60!=null&&price>m60),trend5,trend20,
+   volRatio:v20?v5/v20:1,amt:arr[N-1].amt};
 }
-function stkAdvice(s,k){
- const chg=s.chg||0,net=s.flow? s.flow.net:null;let score=0;const reasons=[],tags=[];
- if(net!=null){
-  if(net>0){score+=1;tags.push('主力净流入');reasons.push('主力资金净流入 '+flowTxt(net)+(s.flow&&s.flow.ratio!=null?('，占成交额 '+num(s.flow.ratio)+'%'):''));}
-  else if(net<0){score-=1;tags.push('主力净流出');reasons.push('主力资金净流出 '+flowTxt(-net)+(s.flow&&s.flow.ratio!=null?('，占成交额 '+num(s.flow.ratio)+'%'):''));}
-  else reasons.push('主力资金当日基本持平');
- }else reasons.push('资金流向数据暂未获取');
+/* ===== 自选股操作建议 v2：技术面 + 基本面 + 市场环境，具体可落地 ===== */
+const STK_ADV={
+ pos:{strong:30, neutral:20, weak:12},                         // 单票仓位上限(%) 随市场环境收紧/放宽
+ zone:{buyHighPad:0.012, buyLowPad:0.012, stopPad:0.035, stopPct:0.06, rr:2.0}, // 买入区间/止损/目标(风险回报比)
+ risk:{minMcap:30e8, limitPct:9.3, hotTurn:15, warnTurn:8},   // 风控阈值
+ val:{peLow:12, peHigh:35, pbHigh:4}                          // 估值参考分位
+};
+function stkCfg(){return Object.assign({},STK_ADV,(D.invest&&D.invest.stkCfg)||{});}
+// 市场环境：抓 上证/创业板/沪深300 趋势，判定 强/中/弱（缓存 10 分钟）
+function fetchMktEnv(force){
+ const now=Date.now();
+ if(!force&&D.invest.mktEnv&&now-(D.invest.mktEnv.ts||0)<10*60*1000)return Promise.resolve(D.invest.mktEnv);
+ const idx=[['1.000001','上证指数'],['0.399006','创业板指'],['1.000300','沪深300']];
+ return Promise.all(idx.map(([sec])=>jsonpGet('https://push2his.eastmoney.com/api/qt/stock/kline/get?secid='+sec+'&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=60').then(kj=>{const kl=kj&&kj.data&&kj.data.klines;return kl&&kl.length?computeKline(kl):null}).catch(()=>null)))
+  .then(res=>{
+   const vals=res.filter(Boolean).map(k=>({above20:k.above20,trend20:k.trend20||0}));
+   const bull=vals.filter(v=>v.above20).length;
+   const avgT=vals.length?vals.reduce((a,v)=>a+v.trend20,0)/vals.length:0;
+   let regime='neutral';
+   if(bull>=2&&avgT>0)regime='strong'; else if(bull===0||avgT<-3)regime='weak';
+   const env={regime,label:regime==='strong'?'偏强·多头':regime==='weak'?'偏弱·防御':'中性·震荡',bull,avgT:Math.round(avgT),ts:now};
+   D.invest.mktEnv=env;ST.inv.mktEnv=env;return env;
+  }).catch(()=>(D.invest.mktEnv||{regime:'neutral',label:'中性·震荡',bull:1,avgT:0,ts:now}));
+}
+function curMkt(){return (D.invest&&D.invest.mktEnv)||ST.inv.mktEnv||{regime:'neutral',label:'中性·震荡',bull:1,avgT:0,ts:0};}
+function refreshMkt(){fetchMktEnv(true).then(()=>{save();if(CUR==='invest')render();}).catch(()=>{});}
+// 个股走势状态（驱动动态建议）
+function trendState(k){
+ if(!k)return 'unknown';
+ if(k.bull&&k.above60&&(k.trend20||0)>0)return 'uptrend';
+ if(k.above20&&(k.trend5||0)<0&&k.golden)return 'pullback';
+ if(k.above20&&(k.trend20||0)>=0&&!k.bull)return 'range';
+ if(!k.above20&&(k.trend5||0)>0)return 'recover';
+ if(!k.above20)return 'downtrend';
+ return 'range';
+}
+function actionColor(key){
+ return ({buy:'var(--red)',add:'var(--red)',rebound:'var(--red)',
+   holdwarn:'var(--brand)',range:'var(--brand)',watch:'var(--ink2)',
+   reduce:'var(--green)',avoid:'var(--green)',limitdown:'var(--green)',limitup:'var(--ink2)',halt:'var(--ink2)'})[key]||'var(--ink2)';
+}
+function fundPts(s,cfg){let v=50;const pe=s.pe,pb=s.pb,c=cfg.val;
+ if(pe!=null&&!isNaN(pe)){if(pe<=0)v-=10;else if(pe<c.peLow)v+=12;else if(pe<=c.peHigh)v+=6;else if(pe>c.peHigh*2)v-=8;else if(pe>c.peHigh)v-=3;}
+ if(pb!=null&&!isNaN(pb)){if(pb>0&&pb<c.pbHigh)v+=4;else if(pb>=c.pbHigh*1.5)v-=5;}
+ if(s.mcap&&s.mcap<cfg.risk.minMcap)v-=6;
+ return clamp(Math.round(v),0,100);}
+// 核心入口：返回 动作 / 买卖时机 / 买入区间 / 止损 / 目标 / 仓位(分档) / 风险等级 / 逐项依据
+function stkAdvice(s,k,mkt){
+ const cfg=stkCfg();
+ const price=(s.price!=null)?s.price:(k?k.price:null);
+ const chg=s.chg||0;
+ const net=(s.flow&&s.flow.net!=null)?s.flow.net:null;
+ const ratio=(s.flow&&s.flow.ratio!=null)?s.flow.ratio:(net!=null&&k&&k.amt?net/k.amt*100:null);
+ const pe=s.pe,pb=s.pb,mcap=s.mcap,turn=s.turn;
+ const m=(mkt&&mkt.regime)?mkt:curMkt();
+ const regime=m.regime;
+ const capMax=regime==='strong'?cfg.pos.strong:regime==='weak'?cfg.pos.weak:cfg.pos.neutral;
+ const st=trendState(k);
+ const inflow=net>0,outflow=net<0;
+ const above=k?k.above20:(chg>=0);
+ let support=(k&&k.above20)?(k.m20||k.low20):(k?k.low20:(price?price*0.97:null));
+ if(support==null||isNaN(support))support=price?price*0.97:null;
+ const ma20txt=(k&&k.m20)?('¥'+num(k.m20)):'20日线';
+ const supTxt=(support!=null)?('¥'+num(support)):'支撑位';
+ const lowTxt=(k&&k.low20!=null)?('¥'+num(k.low20)):supTxt;
+ const highTxt=(k&&k.high20!=null)?('¥'+num(k.high20)):'前高';
+ let action,key,timing;
+ const isST=/(ST|退)/.test(s.name||'');
+ if(isST){action='回避';key='avoid';timing='ST/退市风险标的，严守风控不参与';}
+ else if(price==null||isNaN(price)){action='观望';key='halt';timing='暂无有效行情（停牌/未上市），不开新仓';}
+ else if(chg>=cfg.risk.limitPct){action='不追';key='limitup';timing='已涨停无法买入；若开板放量不回封应放弃，等分歧低吸';}
+ else if(chg<=-cfg.risk.limitPct){action='回避';key='limitdown';timing='已跌停流动性枯竭，暂停操作等待打开';}
+ else if(st==='downtrend'&&outflow){action='减仓/清仓';key='reduce';timing='趋势走弱且主力出逃：反弹至 '+ma20txt+' 附近减仓，有效跌破 '+supTxt+' 清仓';}
+ else if(st==='downtrend'&&inflow){action='轻仓博反弹';key='rebound';timing='超跌但趋势未修复，仅可 ≤'+capMax+'% 快进快出，破前低 '+lowTxt+' 止损';}
+ else if(st==='range'){action='区间操作';key='range';timing='箱体运行：'+lowTxt+' 下方低吸、'+highTxt+' 上方高抛，不追涨';}
+ else if(st==='recover'){action='观望';key='watch';timing='超跌反弹未确认反转，等放量站上 '+ma20txt+' 再介入';}
+ else if(st==='uptrend'&&inflow){action='持有/回踩加仓';key='add';timing='上升通道+资金共振：回踩 '+ma20txt+' 不破加仓，沿趋势持有，破 '+ma20txt+' 止盈';}
+ else if(st==='uptrend'&&outflow){action='持有·警惕';key='holdwarn';timing='趋势完好但资金背离，减仓锁利，跌破 '+ma20txt+' 离场';}
+ else if(st==='pullback'&&inflow){action='逢低吸纳';key='buy';timing='强势回踩不破支撑 '+supTxt+'：分批低吸，破位 '+lowTxt+' 下方止损';}
+ else if(st==='pullback'&&outflow){action='观望';key='watch';timing='回踩中资金流出，等企稳（站回 '+ma20txt+' 且放量）再介入';}
+ else if(above&&inflow){action='建仓/持有';key='buy';timing='站上均线且资金流入，可于 '+supTxt+' 附近分批介入';}
+ else{action='观望';key='watch';timing='信号中性，等待方向选择，以观望为主';}
+ const tech=(typeof dimTrend==='function')?dimTrend(k,s):50;
+ const cap=(typeof dimCapital==='function')?dimCapital({mainIn:net,flowRatio:ratio},k):50;
+ const fp=fundPts(s,cfg);
+ const sig=clamp(Math.round(tech*0.5+cap*0.5),0,100);
+ const scoreMod=clamp((sig-45)/55,0,1);
+ const rangeVol=(k&&k.high20!=null&&k.low20!=null&&price)?(k.high20-k.low20)/price:0.12;
+ const volAdj=clamp(1-rangeVol*0.8,0.4,1);
+ let pct=clamp(Math.round(scoreMod*capMax*volAdj),0,capMax);
+ if(['reduce','avoid','limitup','limitdown','watch','halt'].indexOf(key)>=0)pct=0;
+ else if(key==='rebound')pct=Math.min(pct,Math.round(capMax*0.4));
+ else if(key==='buy'||key==='add')pct=Math.max(pct,Math.round(capMax*0.5));
+ else pct=Math.max(pct,Math.round(capMax*0.3));
+ const z=cfg.zone;let buyLow=null,buyHigh=null,stop=null,target=null;
+ if(price!=null&&!isNaN(price)){
+  buyHigh=r2(price*(1+z.buyHighPad));
+  buyLow=r2(Math.max((support!=null?support*(1-z.buyLowPad):0),price*(1-z.stopPct)));
+  stop=r2(Math.min((support!=null?support*(1-z.stopPad):price*(1-z.stopPct)),price*(1-z.stopPct)));
+  target=r2(buyHigh+(buyHigh-stop)*z.rr);
+ }
+ const staged=pct>0?('首仓 '+Math.max(1,Math.round(pct/2))+'% · 确认加 '+(pct-Math.round(pct/2))+'%'):'—';
+ const risk=[];
+ if(isST)risk.push('ST/退市风险，涨跌幅限制 5%，流动性与监管风险极高');
+ if(chg>=cfg.risk.limitPct)risk.push('当日涨停 +'+num(chg)+'%，封板不稳易开板回落，无法买入');
+ else if(chg<=-3)risk.push('当日跌幅 '+num(chg)+'%，短线情绪偏弱');
+ if(turn!=null){if(turn>cfg.risk.hotTurn)risk.push('换手率 '+num(turn)+'% 偏高，筹码松动，警惕主力派发');else if(turn>cfg.risk.warnTurn)risk.push('换手率 '+num(turn)+'% 偏活跃，留意放量是否可持续');}
+ if(pe!=null&&!isNaN(pe)){if(pe<=0)risk.push('动态 PE 为负（业绩亏损），缺乏盈利支撑，纯题材博弈');else if(pe>cfg.val.peHigh*2)risk.push('动态 PE '+num(pe)+' 倍，估值偏贵、安全边际不足');}
+ if(pb!=null&&!isNaN(pb)&&pb>cfg.val.pbHigh*1.5)risk.push('市净率 '+num(pb)+' 倍偏高');
+ if(mcap&&mcap<cfg.risk.minMcap)risk.push('总市值 '+(mcap/1e8).toFixed(0)+'亿 偏小，流动性与波动风险高');
+ if(k&&k.trend5>15)risk.push('近5日涨 '+num(k.trend5)+'%，短线超买，注意获利回吐');
+ if(inflow&&above&&k&&!k.bull)risk.push('站上均线但均线未完全多头，趋势强度待确认');
+ if(outflow&&above)risk.push('股价站均线却主力净流出 '+flowTxt(-net)+'，量价背离防诱多');
+ if(k&&k.low20!=null&&price!=null&&(price-k.low20)/price<0.03)risk.push('已逼近近20日支撑 '+lowTxt+'，破位则趋势破坏');
+ if(regime==='weak')risk.push('当前市场环境偏弱（'+m.label+'），整体仓位应降至 '+capMax+'% 以内并优选强势股');
+ const why=[];
+ why.push('市场环境：'+(m.label||'中性')+(regime==='weak'?'，宜防御':'')+(regime==='strong'?'，可积极':'')+'；个股走势：'+({uptrend:'上升通道',pullback:'强势回踩',range:'箱体震荡',recover:'超跌反弹',downtrend:'下跌通道',unknown:'数据不足'})[st]);
  if(k){
-  if(k.golden){score+=1;reasons.push('MA5 站上 MA20（多头排列），短线转强');}else{score-=1;reasons.push('MA5 在 MA20 下方（空头排列），短线偏弱');}
-  if(k.above20){score+=0.5;reasons.push('股价位于 20 日均线之上');}else{score-=0.5;reasons.push('股价跌破 20 日均线');}
-  if(k.trend5>0){score+=0.5;reasons.push('近 5 日区间 '+num(k.trend5)+'%');}else if(k.trend5<0){score-=0.5;reasons.push('近 5 日区间 '+num(k.trend5)+'%');}
-  if(k.volRatio>1.25)reasons.push('近 5 日均量放大约 '+(k.volRatio).toFixed(1)+' 倍（量能活跃）');
-  else if(k.volRatio<0.8)reasons.push('成交量萎缩（约 20 日均量的 '+(k.volRatio).toFixed(2)+' 倍）');
- }else{if(chg>0)score+=0.5;else if(chg<0)score-=0.5;}
- if(chg>3)reasons.push('当日涨幅 '+num(chg)+'%，追高需谨慎');else if(chg<-3)reasons.push('当日跌幅 '+num(chg)+'%，注意下行风险');
- let label,color,tip;
- if(score>=2){label='积极关注';color='var(--red)';tip='资金与形态共振偏多，可逢回调关注';}
- else if(score>=0.5){label='偏多';color='var(--red)';tip='多方略占优，可持股观察';}
- else if(score<=-2){label='回避 / 减仓';color='var(--green)';tip='资金与形态偏弱，建议控制仓位';}
- else if(score<=-0.5){label='偏空';color='var(--green)';tip='空方略占优，谨慎为宜';}
- else{label='中性观望';color='var(--ink2)';tip='多空均衡，以观望为主';}
- return {label,color,tip,reasons,score};
+  why.push((k.golden?'MA5 上穿 MA20（多头排列）':'MA5 在 MA20 之下（空头排列）')+'，'+(k.above20?'股价站上20日线':'股价跌破20日线')+(k.above60?'且站上60日线':'')+'；近5日 '+(k.trend5>0?'+':'')+num(k.trend5)+'% / 近20日 '+(k.trend20>0?'+':'')+num(k.trend20)+'%');
+  if(k.volRatio>1.3)why.push('量比 '+k.volRatio.toFixed(1)+'，量能配合上攻');else if(k.volRatio<0.8)why.push('量比 '+k.volRatio.toFixed(2)+'，量能萎缩');
+ }
+ if(inflow)why.push('主力净流入 '+flowTxt(net)+(ratio!=null?('，占成交额 '+num(ratio)+'%'):'')+'，资金面偏多');
+ else if(outflow)why.push('主力净流出 '+flowTxt(-net)+(ratio!=null?('，占成交额 '+num(ratio)+'%'):'')+'，资金面偏空');
+ else why.push('主力资金当日基本持平');
+ if(pe!=null&&!isNaN(pe))why.push('估值：动态 PE '+num(pe)+' 倍'+(pe>0&&pe>cfg.val.peHigh?'（偏贵）':pe>0&&pe<cfg.val.peLow?'（偏低）':'（中性）')+(pb!=null&&!isNaN(pb)?('，PB '+num(pb)+' 倍'):''));
+ if(mcap)why.push('总市值 '+(mcap/1e8).toFixed(0)+'亿（'+(mcap<cfg.risk.minMcap?'小盘':'中大盘')+'），流动性'+(mcap<cfg.risk.minMcap?'偏弱':'较好'));
+ return {action,key,label:action,color:actionColor(key),tip:timing,why,risk,score:sig,tech,cap,fund:fp,regime,
+   mktLabel:m.label,st,zone:{buyLow,buyHigh,stop,target,support:(support!=null?r2(support):null)},position:pct,posCap:capMax,staged};
+}
+function stkModelInfo(){
+ const c=stkCfg();const m=curMkt();
+ const capByRegime={strong:c.pos.strong,neutral:c.pos.neutral,weak:c.pos.weak};
+ const html='<div style="font-size:13px;color:var(--ink2);line-height:1.7">'+
+  '<div style="font-weight:700;margin-bottom:6px">操作建议如何生成（可解释、动态）</div>'+
+  '<div style="font-size:12.5px">① <b>市场环境</b>：实时抓取 上证/创业板/沪深300 的 20 日趋势，判定 <b>偏强·多头 / 中性·震荡 / 偏弱·防御</b>。环境越强，单票仓位上限越高（当前 '+capByRegime[m.regime]+'%；强 '+c.pos.strong+'% / 中 '+c.pos.neutral+'% / 弱 '+c.pos.weak+'%），弱势环境整体收紧并优选强势股。</div>'+
+  '<div style="font-size:12.5px;margin-top:5px">② <b>个股走势</b>：由均线系统判定 上升通道 / 强势回踩 / 箱体震荡 / 超跌反弹 / 下跌通道，直接决定动作（加仓 / 低吸 / 区间 / 观望 / 减仓）。</div>'+
+  '<div style="font-size:12.5px;margin-top:5px">③ <b>技术面</b>：MA5/10/20/60 多空排列、站上 20/60 日线、近 5/20 日涨幅、量比配合。</div>'+
+  '<div style="font-size:12.5px;margin-top:5px">④ <b>基本面</b>：动态 PE / PB / 总市值 / 换手率，标记估值偏贵、亏损、小盘流动性等风险。</div>'+
+  '<div style="font-size:12.5px;margin-top:5px">⑤ <b>资金面</b>：主力净流入方向与占成交额比例。</div>'+
+  '<div style="font-size:12.5px;margin-top:5px">⑥ <b>输出</b>：明确动作 + 买卖时机（含具体价位触发条件）+ 买入区间 / 止损位 / 目标位（1:'+c.zone.rr+' 风险回报）+ 分档仓位 + 具体风险提示。</div>'+
+  '<div style="font-size:11.5px;color:var(--ink3);margin-top:9px;border-top:1px dashed var(--line);padding-top:8px">参数（STK_ADV，可在代码中调整）：买入区间 ±'+Math.round(c.zone.buyHighPad*100)+'%、止损 '+(c.zone.stopPct*100)+'%~'+(c.zone.stopPad*100)+'%、估值 PE 低/高 '+c.val.peLow+'/'+c.val.peHigh+'、微盘阈值 '+(c.risk.minMcap/1e8)+'亿、涨停阈值 '+c.risk.limitPct+'%。</div>'+
+  '</div>';
+ openM('操作建议模型说明',html,false,520);
 }
 function klineSVG(k){
  const W=520,H=220,padL=6,padR=44,padT=10,padB=18;
@@ -2202,29 +2382,72 @@ function klineSVG(k){
 }
 async function stkDetail(id){
  const s=D.invest.stocks.find(x=>x.id===id);if(!s)return;
- openM(esc(s.name||s.code)+' · 操作建议','<div id="stkD" style="font-size:13px;color:var(--ink2)">正在抓取资金流向与 K 线…</div>',false,560);
+ openM(esc(s.name||s.code)+' · 操作建议','<div id="stkD" style="font-size:13px;color:var(--ink2)">正在抓取资金流向、估值与 K 线…</div>',false,580);
  const sec=secid(s.code);
- const furl='https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&np=1&secids='+sec+'&fields=f2,f3,f12,f14,f62&ut=fa5fd1943c7b386f172d6893dbfba10b';
+ const furl='https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&np=1&secids='+sec+'&fields=f2,f3,f12,f14,f62,f6,f8,f60,f116,f117,f15,f16,f18&ut=fa5fd1943c7b386f172d6893dbfba10b';
  const kurl='https://push2his.eastmoney.com/api/qt/stock/kline/get?secid='+sec+'&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=60';
  let flow=null,k=null;
  try{const fj=await jsonpGet(furl);const d=fj&&fj.data&&fj.data.diff;const it=Array.isArray(d)?d[0]:(d?Object.values(d)[0]:null);
-  if(it&&it.f62!==undefined&&it.f62!=='-')flow={net:+it.f62};}catch(e){}
+  if(it){
+   if(it.f62!==undefined&&it.f62!=='-'&&it.f62!=null)flow={net:+it.f62};
+   if(it.f6!==undefined&&it.f6!=='-'&&+it.f6&&flow)flow.ratio=flow.net/(+it.f6)*100;
+   if(it.f2!==undefined&&it.f2!=='-'&&it.f2!=null){s.price=+it.f2;if(!s.name||s.name===s.code)s.name=it.f14||s.name;}
+   if(it.f3!==undefined&&it.f3!=='-'&&it.f3!=null)s.chg=+it.f3;
+   if(it.f8!==undefined&&it.f8!=='-'&&it.f8!=null)s.turn=+it.f8;
+   if(it.f60!==undefined&&it.f60!=='-'&&it.f60!=null)s.mcap=+it.f60;
+   if(it.f116!==undefined&&it.f116!=='-'&&it.f116!=null)s.pe=+it.f116;
+   if(it.f117!==undefined&&it.f117!=='-'&&it.f117!=null)s.pb=+it.f117;
+   if(it.f15!==undefined&&it.f15!=='-'&&it.f15!=null)s.high=+it.f15;
+   if(it.f16!==undefined&&it.f16!=='-'&&it.f16!=null)s.low=+it.f16;
+   if(it.f18!==undefined&&it.f18!=='-'&&it.f18!=null)s.preClose=+it.f18;
+  }}catch(e){}
  try{const kj=await jsonpGet(kurl);const kl=kj&&kj.data&&kj.data.klines;
-  if(kl&&kl.length){k=computeKline(kl);if(k&&k.amt&&flow)flow.ratio=flow.net/k.amt*100;if(k)s.k={golden:k.golden,above20:k.above20,trend5:k.trend5,volRatio:k.volRatio,price:k.price,m5:k.m5,m20:k.m20,ts:Date.now()};}}catch(e){}
+  if(kl&&kl.length){k=computeKline(kl);if(k&&k.amt&&flow)flow.ratio=flow.net/k.amt*100;
+   if(k)s.k={golden:k.golden,above20:k.above20,trend5:k.trend5,trend20:k.trend20,volRatio:k.volRatio,price:k.price,
+     m5:k.m5,m10:k.m10,m20:k.m20,m60:k.m60,bull:k.bull,above60:k.above60,low20:k.low20,high20:k.high20,amt:k.amt,ts:Date.now()};}}catch(e){}
  if(flow)s.flow=Object.assign(s.flow||{},flow);
- const ad=stkAdvice(s,s.k);
+ const m=await fetchMktEnv(true);
+ const ad=stkAdvice(s,k,m);
+ const stLabel={uptrend:'上升通道',pullback:'强势回踩',range:'箱体震荡',recover:'超跌反弹',downtrend:'下跌通道',unknown:'数据不足'}[ad.st];
+ const rl=ad.risk.length>=4?'高':ad.risk.length>=2?'中':'低';
+ const rlcol=rl==='高'?'var(--green)':rl==='中'?'var(--brand)':'var(--ink2)';
+ const cell=(lab,val,col)=>'<div style="background:var(--line2);border-radius:10px;padding:8px 10px"><div style="font-size:11px;color:var(--ink3)">'+lab+'</div><b class="num" style="font-size:14px;'+(col?'color:'+col:'')+'">'+val+'</b></div>';
+ const z=ad.zone;
  const body=(k?('<div style="margin-bottom:10px">'+klineSVG(k)+'</div>'):'')+
-  '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
-  '<span style="background:'+ad.color+'1a;color:'+ad.color+';border:1px solid '+ad.color+'55;font-weight:700;padding:5px 11px;border-radius:9px">'+ad.label+'</span>'+
-  '<span style="font-size:13px;color:var(--ink2)">'+esc(ad.tip)+'</span></div>'+
-  (flow?'<div class="grid g2" style="margin-bottom:11px">'+
-   '<div style="background:var(--line2);border-radius:10px;padding:9px 11px"><div style="font-size:11px;color:var(--ink3)">今日主力净流入</div><b class="num" style="font-size:15px;color:'+(flow.net>=0?'var(--red)':'var(--green)')+'">'+flowTxt(flow.net)+'</b></div>'+
-   '<div style="background:var(--line2);border-radius:10px;padding:9px 11px"><div style="font-size:11px;color:var(--ink3)">主力净流入占比</div><b class="num" style="font-size:15px;color:'+(flow.net>=0?'var(--red)':'var(--green)')+'">'+(flow.ratio!=null?((flow.ratio>=0?'+':'')+num(flow.ratio)+'%'):'—')+'</b></div></div>':'')+
-  '<div style="font-size:11.5px;color:var(--ink3);margin:2px 0 6px">分析依据</div>'+
+  '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">'+
+  '<span style="background:'+ad.color+'1a;color:'+ad.color+';border:1px solid '+ad.color+'55;font-weight:700;padding:5px 12px;border-radius:9px;font-size:14px">'+esc(ad.action)+'</span>'+
+  '<span style="font-size:11.5px;color:var(--ink3)">信号强度 '+ad.score+'/100 · 技术 '+ad.tech+' · 资金 '+ad.cap+(ad.fund!=null?' · 估值 '+ad.fund:'')+'</span></div>'+
+  '<div style="font-size:12.5px;color:var(--ink2);line-height:1.6;background:'+ad.color+'0d;border-left:3px solid '+ad.color+';border-radius:6px;padding:8px 10px;margin-bottom:11px">买卖时机：'+esc(ad.tip)+'</div>'+
+  '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:11px">'+
+   cell('现价',(s.price!=null?num(s.price):'—'),s.chg>0?'var(--red)':s.chg<0?'var(--green)':'')+
+   cell('涨跌幅',(s.chg!=null?(s.chg>0?'+':'')+num(s.chg)+'%':'—'),s.chg>0?'var(--red)':s.chg<0?'var(--green)':'')+
+   cell('主力净流入',(flow?flowTxt(flow.net):'—'),flow&&flow.net>=0?'var(--red)':'var(--green)')+
+   cell('主力净占比',(flow&&flow.ratio!=null?((flow.ratio>=0?'+':'')+num(flow.ratio)+'%'):'—'),flow&&flow.net>=0?'var(--red)':'var(--green)')+
+   cell('动态 PE',(s.pe!=null&&!isNaN(s.pe)?num(s.pe):'—'))+
+   cell('市净率 PB',(s.pb!=null&&!isNaN(s.pb)?num(s.pb):'—'))+
+   cell('总市值',(s.mcap?(s.mcap/1e8).toFixed(0)+'亿':'—'))+
+   cell('换手率',(s.turn!=null?num(s.turn)+'%':'—'))+'</div>'+
+  '<div style="background:var(--line2);border-radius:12px;padding:12px;margin-bottom:11px">'+
+   '<div style="font-size:12px;font-weight:700;color:var(--ink);margin-bottom:9px">操作计划 · 依市场环境（'+m.label+'）+ 走势（'+stLabel+'）动态生成</div>'+
+   '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:9px">'+
+    '<div style="background:#fff;border-radius:9px;padding:8px 10px"><div style="font-size:11px;color:var(--ink3)">买入区间</div><b class="num" style="font-size:14px;color:var(--brand)">'+(z.buyLow!=null?num(z.buyLow)+' ~ '+num(z.buyHigh):'—')+'</b></div>'+
+    '<div style="background:#fff;border-radius:9px;padding:8px 10px"><div style="font-size:11px;color:var(--ink3)">止损位</div><b class="num" style="font-size:14px;color:var(--green)">'+(z.stop!=null?num(z.stop):'—')+'</b></div>'+
+    '<div style="background:#fff;border-radius:9px;padding:8px 10px"><div style="font-size:11px;color:var(--ink3)">目标位</div><b class="num" style="font-size:14px;color:var(--red)">'+(z.target!=null?num(z.target):'—')+'</b></div>'+
+   '</div>'+
+   '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2);line-height:1.6">'+
+    '<div>仓位建议：<b class="num" style="color:var(--brand)">'+(ad.position>0?ad.position+'%':'不建仓')+'</b>'+(ad.position>0?'（'+esc(ad.staged)+'；单票上限 '+ad.posCap+'%）':'')+'</div>'+
+    '<div>风险等级：<b style="color:'+rlcol+'">'+rl+'</b></div>'+
+    (z.support!=null?'<div>参考支撑：<b class="num">'+num(z.support)+'</b></div>':'')+
+   '</div></div>'+
+  '<div style="font-size:11.5px;color:var(--ink3);margin:2px 0 6px">分析依据（技术面 + 基本面 + 市场环境）</div>'+
   '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">'+
-  ad.reasons.map(r=>'<div style="display:flex;gap:7px;align-items:flex-start;font-size:13px;line-height:1.5"><span style="color:var(--brand)">•</span><span>'+esc(r)+'</span></div>').join('')+'</div>'+
-  '<div style="font-size:11px;color:var(--ink3);line-height:1.6;border-top:1px dashed var(--line);padding-top:8px">数据来源：东方财富公开行情接口（JSONP 实时抓取）。以上为基于资金流向与技术形态的量化初判，<b>仅供参考，不构成任何投资建议</b>；投资有风险，决策需谨慎。</div>';
+  ad.why.map(r=>'<div style="display:flex;gap:7px;align-items:flex-start;font-size:13px;line-height:1.5"><span style="color:var(--brand)">•</span><span>'+esc(r)+'</span></div>').join('')+'</div>'+
+  (ad.risk.length?'<div style="font-size:11.5px;color:var(--ink3);margin:2px 0 6px">风险提示（具体）</div>'+
+   '<div style="background:var(--green)0d;border:1px solid var(--green)33;border-radius:10px;padding:9px 11px;display:flex;flex-direction:column;gap:6px;margin-bottom:12px">'+
+   ad.risk.map(r=>'<div style="display:flex;gap:7px;align-items:flex-start;font-size:12.5px;line-height:1.5"><span style="color:var(--green)">!</span><span>'+esc(r)+'</span></div>').join('')+'</div>':'')+
+  '<div style="font-size:11px;color:var(--ink3);line-height:1.6;border-top:1px dashed var(--line);padding-top:8px">数据来源：东方财富公开行情接口（JSONP 实时抓取）。以上为结合技术面、基本面与市场环境的量化初判，<b>仅供参考，不构成任何投资建议</b>；投资有风险，决策需谨慎。</div>';
  const box=document.getElementById('stkD');if(box)box.innerHTML=body;
+ save();
  if(CUR==='invest')render();
 }
 /* --- 技术形态选股（全市场扫描） --- */
@@ -2419,33 +2642,362 @@ function invFlow(){
   (arr.length?'<div class="lst">'+list+'</div>':'<div class="empty">'+ic('zap',30)+'暂无数据，点右上角「刷新」获取今日行业 / 概念板块资金流向</div>')+
   (upd?'<div class="sub" style="margin-top:8px">更新于 '+upd+' · 数据来自东方财富公开接口，仅供参考</div>':'')+'</div>';
 }
-/* --- 今日操作建议（主板扫描：趋势 + 资金 + 形态 综合打分，跨日跟踪） --- */
-function sugBadge(a){const c=a==='买入'?'var(--red)':(a==='规避'||a==='卖出')?'var(--green)':(a==='观望'?'var(--ink2)':'var(--brand)');return '<span style="background:'+c+'1a;color:'+c+';border:1px solid '+c+'55;font-weight:700;padding:4px 10px;border-radius:9px;font-size:12.5px">'+a+'</span>'}
-function suggestScore(s,k,det){
- const reasons=[];let trendScore=0,capitalScore=0,patternScore=0;
- if(k){
-  if(k.above20){trendScore+=10;reasons.push('站上20日线，中期趋势向上');}else{trendScore-=8;reasons.push('跌破20日线，趋势偏弱');}
-  if(k.golden){trendScore+=10;reasons.push('MA5 上穿 MA20（多头排列）');}else{trendScore-=6;reasons.push('MA5 在 MA20 下方（空头排列）');}
-  const t5=Math.max(-10,Math.min(12,k.trend5||0));trendScore+=t5;
-  if(k.trend5>0)reasons.push('近5日涨幅 '+num(k.trend5)+'%');else if(k.trend5<0)reasons.push('近5日跌幅 '+num(k.trend5)+'%');
-  if(k.volRatio>1.3)reasons.push('近5日均量放大 '+k.volRatio.toFixed(1)+' 倍（量能活跃）');
- }else{if(s.chg>0)trendScore+=4;else trendScore-=4;}
- if(s.mainIn>0){capitalScore+=15+Math.min(15,Math.log10(1+s.mainIn/1e8)*5);reasons.push('主力净流入 '+flowTxt(s.mainIn));}
- else if(s.mainIn<0){capitalScore-=Math.min(22,Math.log10(1+Math.abs(s.mainIn)/1e8)*7);reasons.push('主力净流出 '+flowTxt(-s.mainIn));}
- else reasons.push('主力资金当日持平');
- if(det){
-  const PN={w:['W双底',8],xs:['仙人指路',6],ytau:['老鸭头',8],gpk:['黄金坑',8]};
-  ['w','xs','ytau','gpk'].forEach(p=>{const d=det[p];if(d&&d.hit){patternScore+=PN[p][1];reasons.push(PN[p][0]+'：'+d.why);}});
+/* --- 跟踪筛选：按实时资金流向排序 + 基本面 + 自选池 + 盘前盘后板块自动推荐 --- */
+const TRK_Filter={
+  mcapMin:30e8,        // 最低市值（元）：30 亿，过滤微盘
+  peMax:120,           // PE 上限（亏损/异常值剔除）
+  peMin:0,             // PE 下限（避免极端值）
+  pbMax:10,            // PB 上限
+  turnMin:1,           // 换手下限：剔除僵尸股
+  turnMax:25,          // 换手上限：剔除高投机
+  avoidLimit:9.3,      // 涨跌停阈值
+  mainInMin:1e8        // 主力净流入最小：1 亿
+};
+const TRK_Session=(h)=>{h=(h==null?new Date().getHours():h);return h>=15?'evening':h>=11.5?'noon':'morning';};
+const TRK_SessionLabel={morning:'盘前（开盘准备）',noon:'盘中（11:30–15:00）',evening:'盘后（收盘复盘）'};
+function trackApplyFilter(s,cfg){
+ const r=cfg||TRK_Filter;
+ const reasons=[];
+ if(s.name&&/ST|退/.test(s.name))reasons.push('ST');
+ if(s.price==null||isNaN(s.price))reasons.push('无价');
+ if(Math.abs(s.chg||0)>=r.avoidLimit)reasons.push(s.chg>0?'涨停':'跌停');
+ if(s.mcap&&s.mcap>0&&s.mcap<r.mcapMin)reasons.push('微盘');
+ if(s.pe!=null&&(s.pe<=r.peMin||s.pe>r.peMax))reasons.push('PE 异常');
+ if(s.pb!=null&&s.pb>r.pbMax)reasons.push('PB 异常');
+ if(s.turn!=null&&(s.turn<r.turnMin||s.turn>r.turnMax))reasons.push('换手异常');
+ if((s.mainIn||0)<r.mainInMin)reasons.push('流入不足');
+ return reasons;
+}
+function trackRecommendBoards(sess,kind,boards){
+ // sess='morning' 偏好 早盘强势/概念 起爆；sess='evening' 偏好 收盘资金沉淀/行业龙头；noon 看强度持续性
+ const arr=(boards||[]).filter(b=>b&&b.name);
+ if(!arr.length)return {tagline:'',picks:[]};
+ let sortFn;
+ if(sess==='morning')sortFn=(a,b)=>(b.net*0.7+(b.rate||0)*1e7*0.3)-(a.net*0.7+(a.rate||0)*1e7*0.3);
+ else if(sess==='evening')sortFn=(a,b)=>(b.net*1.0+(b.chg||0)*1e7*0.0)-(a.net*1.0+(a.chg||0)*1e7*0.0);
+ else sortFn=(a,b)=>b.net-a.net;
+ const top=arr.slice().sort(sortFn).slice(0,3);
+ const tagline=sess==='morning'?'早盘资金抢先布局，关注概念起爆与高弹性领涨股':
+              sess==='evening'?'收盘资金沉淀，挑选主力真金白银介入、不是游资一日游的板块':
+              '午盘资金回流，从强势持续到补涨的板块';
+ const bm=(D.invest&&D.invest.boardMembers)||{};
+ const picks=top.map(b=>{
+  const cached=bm[b.code];
+  let members=[];
+  if(cached&&cached.members&&cached.members.length){
+   members=cached.members.map(m=>({code:m.code,name:m.name,chg:m.chg,mainIn:m.mainIn,mcap:m.mcap,pe:m.pe,pb:m.pb,turn:m.turn}));
+  }else if(b.lead){
+   // 接口尚未拉回 / 失败 → 至少展示 lead 字段作兜底
+   members=[{name:b.lead,code:'',leadOnly:true}];
+  }
+  return {
+   code:b.code,name:b.name,chg:b.chg,net:b.net,rate:b.rate,lead:b.lead,
+   scoreSess:sess,reason:sess==='morning'?'早盘资金集中抢筹':sess==='evening'?'收盘资金沉淀':'盘中持续强势',
+   members
+  };
+ });
+ return {tagline,picks};
+}
+// 拉一个板块的成分股：东财 b:BKxxxx+f:!50 接口，按主力净流入+基本阈值过滤，取前 5 只
+async function trackBoardMembers(bkCode){
+ if(!bkCode)return [];
+ const url='https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=15&po=1&np=1&fltt=2&invt=2&fid=f3&fs=b:'+bkCode+'+f:!50&fields=f12,f14,f3,f62,f60,f116,f117,f168&ut=fa5fd1943c7b386f172d6893dbfba10b';
+ try{
+  const j=await jsonpGet(url,8000);
+  const diff=(j&&j.data&&j.data.diff)||[];
+  const arr=(Array.isArray(diff)?diff:Object.values(diff)).map(x=>({
+   code:String(x.f12),name:String(x.f14||x.f12),chg:+x.f3,mainIn:+x.f62||0,mcap:+x.f60||0,
+   pe:x.f116==='-'?null:+x.f116,pb:x.f117==='-'?null:+x.f117,turn:+x.f168||0
+  })).filter(s=>s.code&&s.name&&!/ST|退/.test(s.name));
+  // 基本阈值筛选：市值 ≥ 30 亿、PE ∈ [0,200]、PB ≤ 15、换手 ≥ 0.5、非涨跌停
+  const filt=arr.filter(s=>
+   (s.mcap===0||s.mcap>=30e8)&&
+   (s.pe==null||(s.pe>=0&&s.pe<=200))&&
+   (s.pb==null||s.pb<=15)&&
+   (s.turn===0||s.turn>=0.5)&&
+   Math.abs(s.chg||0)<9.3
+  );
+  // 排序：先按 mainIn 降序；同 0 流入时按 chg 降序
+  filt.sort((a,b)=>(b.mainIn-a.mainIn)||((b.chg||0)-(a.chg||0)));
+  return filt.slice(0,5);
+ }catch(e){return [];}
+}
+async function trackFetch(){
+ if(window._trackBusy)return;window._trackBusy=1;
+ if(typeof ST.inv.trackOnly==='undefined')ST.inv.trackOnly=false;
+ if(typeof ST.inv.trackSession==='undefined')ST.inv.trackSession=TRK_Session();
+ toast('正在拉取资金流向与全市场基本面…');
+ // 1) 板块资金流向（行业 + 概念）—— 复用与 flowFetch 相同的东财接口
+ const flowKind=async(k)=>{
+  const fs=k==='gn'?'m:90+t:3+f:!50':'m:90+t:2+f:!50';
+  const url='https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&fltt=2&invt=2&fid=f62&fs='+fs+'&fields=f12,f14,f3,f62,f184,f128';
+  try{
+   const j=await jsonpGet(url,9000);
+   const diff=(j&&j.data&&j.data.diff)||[];
+   const arr=(Array.isArray(diff)?diff:Object.values(diff)).map(x=>({code:x.f12,name:x.f14,chg:x.f3,net:x.f62,rate:x.f184,lead:x.f128})).filter(x=>x.name);
+   D.invest.flow=D.invest.flow||{};
+   D.invest.flow[k]=arr;D.invest.flow.ts=Date.now();
+  }catch(e){}
+ };
+ await Promise.all([flowKind('hy'),flowKind('gn')]);
+ // 2) 全市场主板按主力净流入排序 + 基本面
+ const fsMain='m:0+t:6,m:1+t:2';
+ const pickUrl=(fid)=>'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=120&po=1&np=1&fltt=2&invt=2&fid='+fid+'&fs='+fsMain+'&fields=f12,f14,f2,f3,f62,f168,f60,f116,f117';
+ try{
+  const ja=await netJSON(pickUrl('f62'));
+  const parse=(j)=>((j&&j.data&&j.data.diff)||[]).map(x=>({code:String(x.f12),name:String(x.f14||x.f12),price:+x.f2,chg:+x.f3,mainIn:+x.f62,turn:+x.f168,mcap:+x.f60,pe:+x.f116,pb:+x.f117})).filter(s=>s.code);
+  const pool={};
+  parse(ja).forEach(s=>{if(/^(60|00)/.test(s.code))pool[s.code]=s});
+  D.invest.trackPool=Object.values(pool);
+ }catch(e){}
+ // 3) 推荐板块的「建议关注个股」预拉：当前时段行业/概念各 Top3，逐个拉成分股接口，缓存到 boardMembers
+ try{
+  D.invest.boardMembers=D.invest.boardMembers||{};
+  const sess=TRK_Session();
+  const getTopBoards=(kind)=>{
+   const arr=((D.invest.flow||{})[kind]||[]).filter(b=>b&&b.name);
+   let sortFn;
+   if(sess==='morning')sortFn=(a,b)=>(b.net*0.7+(b.rate||0)*1e7*0.3)-(a.net*0.7+(a.rate||0)*1e7*0.3);
+   else if(sess==='evening')sortFn=(a,b)=>(b.net)-(a.net);
+   else sortFn=(a,b)=>b.net-a.net;
+   return arr.slice().sort(sortFn).slice(0,3);
+  };
+  const targets=[...getTopBoards('hy'),...getTopBoards('gn')].filter(b=>b&&b.code&&!D.invest.boardMembers[b.code]);
+  // 串行拉（限流保护）；并发 2 个也不会被限
+  for(let i=0;i<targets.length;i+=2){
+   const batch=targets.slice(i,i+2);
+   const r=await Promise.all(batch.map(b=>trackBoardMembers(b.code).then(m=>({code:b.code,members:m}))));
+   r.forEach(x=>{if(x.members&&x.members.length)D.invest.boardMembers[x.code]={members:x.members,ts:Date.now()}});
+  }
+ }catch(e){}
+ D.invest.trackTs=Date.now();
+ window._trackBusy=0;save();if(CUR==='invest')render();
+}
+function invTrack(){
+ const ts=D.invest.trackTs;
+ const sess=(typeof ST.inv.trackSession==='string'&&ST.inv.trackSession)?ST.inv.trackSession:TRK_Session();
+ const only=!!ST.inv.trackOnly;
+ const pool=D.invest.trackPool||[];
+ const selfCodes=new Set(D.invest.stocks.map(s=>s.code.replace(/^(SH|SZ|BJ)/i,'')));
+ // 排序：按 mainIn 降序
+ const sorted=pool.slice().sort((a,b)=>(b.mainIn||0)-(a.mainIn||0));
+ // 筛选：基本面阈值
+ const filtered=sorted.map(s=>Object.assign({},s,{_rejects:trackApplyFilter(s)})).filter(s=>s._rejects.length===0);
+ // 自选池过滤
+ const list=only?filtered.filter(s=>selfCodes.has(s.code.replace(/^(SH|SZ|BJ)/i,''))):filtered;
+ // 资金流向排序结果（仅展示 top30）
+ const topRows=(sorted.length?'':[]).concat?[]:sorted; // 占位保持结构一致
+ const rankTop=sorted.slice(0,30);
+ const upd=ts?new Date(ts).toLocaleString('zh-CN'):null;
+ // 板块推荐：盘前/盘后由时段决定
+ const flowData=D.invest.flow||{};
+ const recIndustry=trackRecommendBoards(sess,flowData.kind||'hy',flowData.hy||[]);
+ const recConcept=trackRecommendBoards(sess,flowData.kind||'gn',flowData.gn||[]);
+ const sessTab=(k,n)=>'<div class="tab" style="padding:4px 12px;font-size:12px'+(sess===k?' on':'')+'" onclick="ST.inv.trackSession=\''+k+'\';render()">'+n+'</div>';
+ // 顶部时段切换 & 自选池过滤
+ const controls='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0 8px">'+
+  '<div class="tabs" style="margin:0;flex:none">'+sessTab('morning','盘前')+sessTab('noon','盘中')+sessTab('evening','盘后')+'</div>'+
+  '<div style="flex:1"></div>'+
+  '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ink2);cursor:pointer">'+
+    '<input type="checkbox" '+(only?'checked':'')+' onchange="ST.inv.trackOnly=!!this.checked;render()">仅自选池'+
+  '</label>'+
+ '</div>';
+ const head='<div class="invSticky"><div class="ch"><h3>'+ic('scope',15)+'跟踪筛选</h3>'+
+  '<span class="sub">按实时资金流向排序 · 基本面过滤 · 盘前/盘后自动推荐板块</span>'+
+  '<div class="sp"></div>'+
+  '<button class="btn sm pri" onclick="trackFetch()">'+ic('refresh',14)+(window._trackBusy?'刷新中…':'刷新')+'</button></div>'+
+  controls+'</div>';
+ if(!ts&&!pool.length&&!window._trackScheduled){
+  window._trackScheduled=1;setTimeout(()=>{window._trackScheduled=0;trackFetch()},250);
  }
- patternScore=Math.min(25,patternScore);
- const total=trendScore+capitalScore+patternScore;
+ const updLine=upd?'<div class="sub" style="margin-top:8px">更新于 '+upd+' · 数据来自东方财富公开接口，仅供参考</div>':'';
+ // A) 资金流向排序结果
+ const fmtCell=(v,dec)=>(v==null||isNaN(v)?'—':(v>0?'+':'')+num(v)+(dec?'%':''));
+ const rankHtml=rankTop.length?'<div class="lst">'+rankTop.map((s,i)=>{
+  const cls=s.chg>0?'pos':s.chg<0?'neg':'';
+  const inSelf=selfCodes.has(s.code)?'<span class="tag b" style="font-size:10px;padding:1px 5px">自选</span>':'';
+  const flowCls=s.mainIn>=0?'var(--red)':'var(--green)';
+  return '<div class="li"><div class="gr" style="flex:1;min-width:0"><div class="t1">'+(i+1)+'. '+esc(s.name)+' <span style="color:var(--ink3);font-weight:400;font-size:11.5px">'+esc(s.code)+'</span> '+inSelf+'</div>'+
+  '<div class="t2">PE '+(s.pe!=null&&!isNaN(s.pe)?(s.pe<0?'亏损':num(s.pe)):'-')+' · PB '+(s.pb!=null&&!isNaN(s.pb)?num(s.pb):'-')+' · 市值 '+(s.mcap?(s.mcap/1e8).toFixed(0)+'亿':'-')+' · 换手 '+(s.turn?num(s.turn)+'%':'-')+'</div></div>'+
+  '<div style="text-align:right;flex:none;min-width:84px"><div class="num '+cls+'" style="font-weight:700;font-size:14px">'+(s.chg!=null?(s.chg>0?'+':'')+num(s.chg)+'%':'—')+'</div>'+
+  '<div class="num" style="font-size:11.5px;color:'+flowCls+'">主力 '+flowTxt(s.mainIn)+'</div></div></div>';
+}).join('')+'</div>':'<div class="empty">'+ic('zap',26)+'暂无资金流向数据，点右上角「刷新」获取</div>';
+ // B) 基本面筛选后的清单（最多 30 只）
+ const filteredHtml=list.length?'<div class="lst">'+list.slice(0,30).map((s,i)=>{
+  const cls=s.chg>0?'pos':s.chg<0?'neg':'';
+  const flowCls=s.mainIn>=0?'var(--red)':'var(--green)';
+  const added=selfCodes.has(s.code);
+  return '<div class="li"><div class="gr" style="flex:1;min-width:0"><div class="t1">'+(i+1)+'. '+esc(s.name)+' <span style="color:var(--ink3);font-weight:400;font-size:11.5px">'+esc(s.code)+'</span> '+(added?'<span class="tag b" style="font-size:10px;padding:1px 5px">已自选</span>':'')+'</div>'+
+  '<div class="t2">PE '+(s.pe!=null&&!isNaN(s.pe)?(s.pe<0?'亏损':num(s.pe)):'-')+' · PB '+(s.pb!=null&&!isNaN(s.pb)?num(s.pb):'-')+' · 市值 '+(s.mcap?(s.mcap/1e8).toFixed(0)+'亿':'-')+' · 换手 '+(s.turn?num(s.turn)+'%':'-')+'</div></div>'+
+  '<div style="text-align:right;flex:none;min-width:88px"><div class="num '+cls+'" style="font-weight:700;font-size:14px">'+(s.chg!=null?(s.chg>0?'+':'')+num(s.chg)+'%':'—')+'</div>'+
+  '<div class="num" style="font-size:11.5px;color:'+flowCls+'">'+flowTxt(s.mainIn)+'</div></div></div>';
+}).join('')+'</div>':'<div class="empty">'+ic('filter',26)+(only?'当前自选池暂未命中基本面阈值，可取消勾选查看全市场':'暂无通过基本面筛选的个股，请稍后刷新或调整时段')+'</div>';
+ // C) 板块推荐与关注个股
+ const renderBoardSection=(title,rec)=>{
+  if(!rec.picks.length)return '<div style="margin-bottom:14px"><div class="sub" style="margin:4px 2px 7px;font-weight:700">'+title+'</div><div class="t2" style="padding:4px 2px 8px;color:var(--ink3)">该时段暂无符合规则的板块</div></div>';
+  const renderMembers=(mems)=>{
+   if(!mems||!mems.length)return '';
+   // 主：列出 3-5 只成分股（来自 boardMembers）；兜底：仅 lead 字段
+   const real=mems.filter(x=>!x.leadOnly);
+   if(!real.length&&mems.length){
+    const only=mems[0];
+    return '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--line)"><span class="sub" style="margin:0 6px 0 0">建议关注：</span><span class="tag" style="font-size:11px;padding:2px 8px;background:var(--brand)1a;color:var(--brand);border:1px solid var(--brand)55">'+esc(only.name)+'（领涨股）</span></div>';
+   }
+   const chips=real.map(m=>{
+    const cls=m.chg>0?'r':m.chg<0?'g':'b';
+    return '<span class="tag '+cls+'" style="cursor:default;padding:3px 8px;font-size:11.5px" title="'+(m.code?esc(m.code)+' · ':'')+'市值 '+(m.mcap?(m.mcap/1e8).toFixed(0)+'亿':'-')+' · 净入 '+flowTxt(m.mainIn||0)+'">'+
+     esc(m.name)+(m.code?' <span style="opacity:.7;font-size:10.5px">'+esc(m.code)+'</span>':'')+
+     '</span>';
+   }).join('');
+   return '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--line);display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap"><span class="sub" style="margin:2px 0 0;flex:none">建议关注 '+real.length+' 只：</span><span style="display:flex;gap:5px;flex-wrap:wrap;flex:1;min-width:0">'+chips+'</span></div>';
+  };
+  return '<div style="margin-bottom:14px"><div class="sub" style="margin:4px 2px 7px;font-weight:700">'+title+' · '+rec.picks.length+' 个</div><div class="lst">'+rec.picks.map(b=>{
+   const chg=b.chg>0?'pos':b.chg<0?'neg':'';
+   const flowCls=b.net>=0?'var(--red)':'var(--green)';
+   return '<div class="li"><div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0"><div class="gr" style="flex:1;min-width:0"><div class="t1">'+esc(b.name)+'</div>'+
+   '<div class="t2">'+esc(b.reason||'')+(b.lead&&!(b.members&&b.members.filter(x=>!x.leadOnly).length)?' · 领涨 '+esc(b.lead):'')+'</div></div>'+
+   '<div style="text-align:right;flex:none;min-width:96px"><div class="num '+chg+'" style="font-weight:700;font-size:14px">'+(b.chg!=null?(b.chg>0?'+':'')+num(b.chg)+'%':'—')+'</div>'+
+   '<div class="num" style="font-size:11.5px;color:'+flowCls+'">净入 '+flowTxt(b.net)+'</div></div></div>'+
+   renderMembers(b.members)+
+   '</div>';
+  }).join('')+'</div><div class="sub" style="margin:-6px 2px 0;color:var(--ink2)">本时段策略：'+rec.tagline+'</div></div>';
+ };
+ const sessLabel=TRK_SessionLabel[sess]||'';
+ const boardHtml='<div class="card" style="margin-top:14px"><div class="ch"><h3>'+ic('compass',15)+'当前时段板块推荐</h3><span class="sub">'+sessLabel+'</span></div>'+
+  renderBoardSection('行业板块推荐',recIndustry)+
+  renderBoardSection('概念板块推荐',recConcept)+
+  '</div>';
+ const notes='<div style="font-size:11.5px;color:var(--ink3);line-height:1.7;margin-top:11px;border-top:1px dashed var(--line);padding-top:8px">资金流向取自东方财富公开行情 f62 字段，按不同时段（盘前/盘中/盘后）对板块资金净流入做加权排序；个股清单先剔除微盘/ST/涨跌停/PE-PB 异常/换手异常，再按主力净流入降序排列；勾选「仅自选池」可只看交集；本工具仅为基于公开行情的量化初判，<b>仅供参考，不构成任何投资建议</b>。</div>';
+ const main='<div class="card" style="margin-top:14px">'+
+  '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0 2px">'+
+   '<div class="sub" style="margin:0;font-weight:700">① 实时资金流向排序 · Top 30（沪深主板，按主力净流入）</div></div>'+
+  rankHtml+
+  '</div>'+
+  '<div class="card" style="margin-top:14px">'+
+   '<div class="sub" style="margin:6px 0 8px;font-weight:700">② 基本面筛选后个股清单（'+list.length+' 只 · 可切换自选池）</div>'+
+   filteredHtml+notes+'</div>';
+ return head+boardHtml+main+updLine;
+}
+/* --- 今日操作建议（主板扫描：趋势 + 资金 + 形态 综合打分，跨日跟踪） --- */
+function sugBadge(a){const c=(/强买|买入/).test(a)?'var(--red)':(/规避|卖出/).test(a)?'var(--green)':(/观望/).test(a)?'var(--ink2)':'var(--brand)';return '<span style="background:'+c+'1a;color:'+c+';border:1px solid '+c+'55;font-weight:700;padding:4px 10px;border-radius:9px;font-size:12.5px">'+a+'</span>'}
+function sugDimTag(name,v){const col=v>=70?'var(--red)':v>=50?'var(--brand)':v>=35?'var(--ink2)':'var(--green)';return '<span style="font-size:10.5px;color:'+col+';background:'+col+'14;border:1px solid '+col+'40;padding:1px 6px;border-radius:7px">'+name+' '+v+'</span>';}
+function sugRiskBadge(l){const c=l==='高'?'var(--green)':l==='中'?'var(--brand)':'var(--ink2)';return '<span style="font-size:10.5px;color:'+c+';background:'+c+'14;border:1px solid '+c+'40;padding:1px 6px;border-radius:7px">风险 '+l+'</span>';}
+/* ============ 今日操作建议 · 参数化选股模型 ============
+ * 筛选目标（默认）：短线强势突破股 = 趋势向上 + 资金共振 + 技术形态突破。
+ *   维度权重 Wt(趋势)/Wc(资金)/Wp(形态)/Wv(估值) 可参数化，权重和为 1；
+ *   综合分 = Σ(W·维度分)，每维度先归一到 0-100（50=中性），综合分亦 0-100。
+ * 数据源（全部复用现有东方财富接口，无需新增后端）：
+ *   行情  push2 clist/ulist → 现价 / 涨跌幅 / 换手率 / 总市值 / 市盈率PE / 市净率PB
+ *   资金  f62 主力净流入 + 主力净占比(f62÷当日成交额)
+ *   技术  push2his 日线K线 → MA5/10/20/60、趋势、量比、突破形态命中(W双底/仙人指路/老鸭头/黄金坑)
+ * 风控：剔除 ST/涨跌停/停牌/微盘(<30亿)/异常高换手(>25%)/主力大幅净流出(>-8亿)；止损=支撑下方。
+ * 参数可在「今日操作建议 → 调整参数」中改写并持久化到 D.invest.sugCfg。
+ */
+const SUG_MODEL={
+ strategy:'momentum',                                  // momentum 短线强势突破 | breakout 形态突破 | value 价值低估
+ weightsByStrategy:{                                   // 不同策略切换维度侧重（权重和=1）
+   momentum:{Wt:0.38,Wc:0.34,Wp:0.20,Wv:0.08},
+   breakout:{Wt:0.22,Wc:0.20,Wp:0.50,Wv:0.08},
+   value:   {Wt:0.20,Wc:0.20,Wp:0.10,Wv:0.50}},
+ weights:{Wt:0.38,Wc:0.34,Wp:0.20,Wv:0.08},            // 当前生效权重（随 strategy 自动切换）
+ rating:{strong:82,buy:70,watch:58,light:46},          // 综合分阈值：强买/买入/关注/轻仓；<light 观望
+ risk:{minMcap:30e8, maxTurn:25, limitPct:9.3, avoidOutflow:8e8}, // 风控阈值（元 / %）
+ zone:{buyHighPad:0.012, buyLowPad:0.012, stopPad:0.035, stopPct:0.06, rr:2.0}, // 买入区间/止损/目标
+ val:{peLow:12, peHigh:35, pbHigh:4}                   // 估值维度参考分位
+};
+function sugCfg(){return Object.assign({},SUG_MODEL,(D.invest&&D.invest.sugCfg)||{});}
+function r2(x){return Math.round((+x||0)*100)/100;}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function sugWeights(cfg){return cfg.weightsByStrategy[cfg.strategy]||cfg.weights;}
+function dimTrend(k,s){
+ if(!k)return (s&&s.chg>0)?56:44;
+ let v=50;
+ if(k.above20)v+=18; else v-=14;
+ if(k.golden)v+=13; else v-=10;
+ if(k.bull)v+=12;
+ v+=clamp(k.trend5*2,-15,17);
+ v+=clamp((k.trend20||0)*0.4,-8,8);
+ if(k.volRatio>1.3)v+=4; else if(k.volRatio<0.7)v-=4;
+ return clamp(Math.round(v),0,100);
+}
+function dimCapital(s,k){
+ let v=50;const mi=s.mainIn||0;
+ if(mi>0)v+=clamp(8+Math.log10(1+mi/1e8)*9,0,30);
+ else if(mi<0)v-=clamp(8+Math.log10(1+Math.abs(mi)/1e8)*10,0,30);
+ let ratio=s.flowRatio; if(ratio==null&&k&&k.amt)ratio=mi/k.amt*100;   // 主力净占比 %
+ if(ratio!=null)v+=clamp(ratio*0.6,-8,10);
+ return clamp(Math.round(v),0,100);
+}
+const SUG_PAT={w:['W双底',20],xs:['仙人指路',16],ytau:['老鸭头',20],gpk:['黄金坑',20]};
+function dimPattern(det){if(!det)return 0;let v=0;['w','xs','ytau','gpk'].forEach(p=>{if(det[p]&&det[p].hit)v+=SUG_PAT[p][1]});return clamp(Math.round(v),0,100);}
+function dimValue(s){
+ let v=50;const pe=s.pe,pb=s.pb,c=sugCfg().val;
+ if(pe!=null&&!isNaN(pe)){
+   if(pe<=0)v-=8; else if(pe<c.peLow)v+=10; else if(pe<=c.peHigh)v+=5; else if(pe>c.peHigh*2)v-=6;
+ }else v-=2;
+ if(pb!=null&&!isNaN(pb)){if(pb>0&&pb<c.pbHigh)v+=4;else if(pb>=c.pbHigh*1.5)v-=3;}
+ return clamp(Math.round(v),0,100);
+}
+// 风控过滤：返回 {pass,tag,why}
+function sugFilters(s,k,cfg){
+ const r=cfg.risk;
+ if(s.name&&/ST|退/.test(s.name))return {pass:false,tag:'ST/风险警示',why:'名称含 ST 或退市风险，监管与流动性风险高'};
+ if(s.price==null||isNaN(s.price))return {pass:false,tag:'停牌',why:'无有效行情（停牌 / 未上市）'};
+ const chg=s.chg||0;
+ if(chg>=r.limitPct)return {pass:false,tag:'涨停',why:'已涨停，无法买入且追高风险极大'};
+ if(chg<=-r.limitPct)return {pass:false,tag:'跌停',why:'已跌停，流动性枯竭'};
+ if(s.mcap&&s.mcap<r.minMcap)return {pass:false,tag:'微盘',why:'总市值 '+(s.mcap/1e8).toFixed(0)+'亿 < '+(r.minMcap/1e8)+'亿，波动与操纵风险高'};
+ if(s.turn&&s.turn>r.maxTurn)return {pass:false,tag:'高换手',why:'换手率 '+s.turn.toFixed(1)+'% > '+r.maxTurn+'%，投机情绪过重'};
+ if((s.mainIn||0)<-r.avoidOutflow)return {pass:false,tag:'主力出逃',why:'主力净流出 '+flowTxt(-s.mainIn)+'，超过风控阈值'};
+ return {pass:true,tag:'',why:''};
+}
+// 买入区间 / 止损位 / 目标位（基于支撑位，可解释）
+function sugZone(s,k,cfg){
+ const z=cfg.zone,p=s.price||(k&&k.price);
+ if(p==null)return {buyLow:null,buyHigh:null,stop:null,target:null,support:null};
+ let support=(k&&k.above20)?k.m20:(k?k.low20:p*0.97);
+ if(support==null||isNaN(support))support=p*0.97;
+ const buyHigh=r2(p*(1+z.buyHighPad));                                   // 不追高：上沿≈现价+1.2%
+ const buyLow=r2(Math.max(support*(1-z.buyLowPad),p*(1-z.stopPct)));     // 下沿=回踩支撑
+ const stop=r2(Math.min(support*(1-z.stopPad),p*(1-z.stopPct)));         // 止损=支撑下方/-6% 硬上限
+ const target=r2(buyHigh+(buyHigh-stop)*z.rr);                           // 目标=上沿+rr×(上沿-止损)
+ return {buyLow,buyHigh,stop,target,support:r2(support)};
+}
+function sugRiskLevel(s,k){
+ let lvl=1; // 1低 2中 3高
+ if(s.turn&&s.turn>15)lvl=Math.max(lvl,3);
+ if(Math.abs(s.chg||0)>=7)lvl=Math.max(lvl,3);
+ if(s.pe!=null&&(s.pe<=0||s.pe>80))lvl=Math.max(lvl,3);
+ if(s.turn&&s.turn>8)lvl=Math.max(lvl,2);
+ if(Math.abs(s.chg||0)>=4)lvl=Math.max(lvl,2);
+ if(k&&k.volRatio>2.2)lvl=Math.max(lvl,2);
+ return lvl>=3?'高':(lvl>=2?'中':'低');
+}
+function sugRating(score,cfg){const R=cfg.rating;
+ if(score>=R.strong)return '强买';if(score>=R.buy)return '买入';
+ if(score>=R.watch)return '关注';if(score>=R.light)return '轻仓';return '观望';}
+// 综合评分（核心入口）：返回评分/评级/维度分/买入区间/风险等级/风控结论
+function suggestScore(s,k,det,cfg){
+ cfg=cfg||sugCfg();const W=sugWeights(cfg);
+ const dT=dimTrend(k,s),dC=dimCapital(s,k),dP=dimPattern(det),dV=dimValue(s);
+ let score=clamp(Math.round(W.Wt*dT+W.Wc*dC+W.Wp*dP+W.Wv*dV),0,100);
+ const f=sugFilters(s,k,cfg);
  let advice;
- if(s.mainIn<0&&total<44)advice='规避';
- else if(total>=62)advice='买入';
- else if(total>=52)advice='关注';
- else if(total>=44)advice='轻仓';
- else advice='观望';
- return {score:Math.round(total),advice,reasons};
+ if(!f.pass)advice='规避';else if((s.mainIn||0)<0&&score<55)advice='规避';else advice=sugRating(score,cfg);
+ const zone=f.pass?sugZone(s,k,cfg):{buyLow:null,buyHigh:null,stop:null,target:null,support:null};
+ const reasons=[];
+ if(k){
+   if(k.above20)reasons.push('站上20日线，中期趋势向上');else reasons.push('跌破20日线，趋势偏弱');
+   if(k.golden)reasons.push('MA5 上穿 MA20（多头排列）');else reasons.push('MA5 在 MA20 下方（空头排列）');
+   if(k.bull)reasons.push('MA5>MA10>MA20>MA60 完全多头排列');
+   if(k.trend5>0)reasons.push('近5日 '+num(k.trend5)+'%');else if(k.trend5<0)reasons.push('近5日 '+num(k.trend5)+'%');
+   if(k.volRatio>1.3)reasons.push('近5日均量放大 '+k.volRatio.toFixed(1)+' 倍（量能活跃）');
+ }else if(s.chg>0)reasons.push('当日上涨 '+num(s.chg)+'%');else reasons.push('当日下跌 '+num(s.chg)+'%');
+ if(s.mainIn>0)reasons.push('主力净流入 '+flowTxt(s.mainIn));
+ else if(s.mainIn<0)reasons.push('主力净流出 '+flowTxt(-s.mainIn));
+ if(det){['w','xs','ytau','gpk'].forEach(p=>{const d=det[p];if(d&&d.hit)reasons.push(SUG_PAT[p][0]+'：'+d.why)});}
+ if(!f.pass)reasons.push('【风控】'+f.tag+'：'+f.why);
+ return {score,advice,reasons,dims:{trend:dT,capital:dC,pattern:dP,value:dV},weights:W,zone,risk:sugRiskLevel(s,k),filter:f};
 }
 async function trackUpdate(todayPicks,date){
  // 买入候选不再自动进入跟踪；改由用户在「今日精选」点「关注」手动加入（见 sugFollow）。
@@ -2464,7 +3016,8 @@ async function trackUpdate(todayPicks,date){
     const pl=t.buyPrice?((price/t.buyPrice-1)*100):null;
     t.pl=pl;t.plDate=date;
     let adv='持有',reason='';
-    if(t.buyPrice&&price<=t.buyPrice*0.95){adv='卖出';t.closed=true;t.closeDate=date;t.closeAdvice='止损';reason='触及止损线 -5%（买入价 '+num(t.buyPrice)+'，现价 '+num(price)+'）';}
+    const stop=(t.stopLoss&&t.stopLoss>0)?t.stopLoss:t.buyPrice*0.95;   // 优先用模型止损位，缺省 -5%
+    if(t.buyPrice&&price<=stop){adv='卖出';t.closed=true;t.closeDate=date;t.closeAdvice='止损';reason='触及模型止损位 '+num(stop)+'（买入价 '+num(t.buyPrice)+'，现价 '+num(price)+'）';}
     else if(net<0&&t.m20&&price<t.m20){adv='卖出';t.closed=true;t.closeDate=date;t.closeAdvice='趋势转弱';reason='股价跌破20日线且主力净流出 '+flowTxt(-net)+'，趋势转弱';}
     else {adv='持有';reason='当前'+(pl!=null?(pl>0?'浮盈 ':'浮亏 ')+num(pl)+'%，':'')+'主力'+(net>=0?'净流入':'净流出')+(t.golden?'、仍处多头排列':'')+'，继续跟踪';}
     t.lastAdvice=adv;t.lastReason=reason;
@@ -2479,35 +3032,42 @@ async function suggestGen(){
  try{
   toast('正在扫描主板个股并分析（约需 30–60 秒）…');
   const fsMain='m:0+t:6,m:1+t:2'; // 沪深主板
-  const pick=(fid)=>netJSON('https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=60&po=1&np=1&fltt=2&invt=2&fid='+fid+'&fs='+fsMain+'&fields=f12,f14,f2,f3,f62,f168');
+  // 行情候选：在原有 f62(主力净流入)/f8(换手率) 排序基础上，补充 总市值/PE/PB 字段供风控与估值维度使用
+  const pick=(fid)=>netJSON('https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=60&po=1&np=1&fltt=2&invt=2&fid='+fid+'&fs='+fsMain+'&fields=f12,f14,f2,f3,f62,f168,f60,f116,f117');
   const [ja,jb]=await Promise.all([pick('f62'),pick('f8')]);
-  const parse=(j)=>((j&&j.data&&j.data.diff)||[]).map(x=>({code:String(x.f12),name:String(x.f14||x.f12),price:+x.f2,chg:+x.f3,mainIn:+x.f62,turn:+x.f168}));
+  const parse=(j)=>((j&&j.data&&j.data.diff)||[]).map(x=>({code:String(x.f12),name:String(x.f14||x.f12),price:+x.f2,chg:+x.f3,mainIn:+x.f62,turn:+x.f168,mcap:+x.f60,pe:+x.f116,pb:+x.f117}));
   const pool={};
   parse(ja).concat(parse(jb)).forEach(s=>{if(/^(60|000|001|002|003)/.test(s.code)&&!pool[s.code])pool[s.code]=s});
   const cands=Object.values(pool);
   ST.inv.suggestTotal=cands.length;
   if(!cands.length)throw new Error('候选为空（接口被限流）');
+  const cfg=sugCfg();const W=sugWeights(cfg);const R=cfg.rating;
   const res=[];const ch=6;let done=0;
   const proc=async list=>{for(const s of list){try{
-     const kj=await netJSON('https://push2his.eastmoney.com/api/qt/stock/kline/get?secid='+secid(s.code)+'&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=90');
+     const kj=await netJSON('https://push2his.eastmoney.com/api/qt/stock/kline/get?secid='+secid(s.code)+'&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=120');
      const kl=kj&&kj.data&&kj.data.klines;let k=null,det=null;
      if(kl&&kl.length>=80){k=computeKline(kl);det=detectAll(kl);}
-     const sc=suggestScore(s,k,det);
-     res.push({code:s.code,name:s.name,secid:secid(s.code),price:s.price,chg:s.chg,mainIn:s.mainIn,turn:s.turn,k:k,score:sc.score,advice:sc.advice,reasons:sc.reasons});
+     const sc=suggestScore(s,k,det,cfg);
+     res.push({code:s.code,name:s.name,secid:secid(s.code),price:s.price,chg:s.chg,mainIn:s.mainIn,turn:s.turn,mcap:s.mcap,pe:s.pe,pb:s.pb,k:k,score:sc.score,advice:sc.advice,reasons:sc.reasons,dims:sc.dims,weights:sc.weights,zone:sc.zone,risk:sc.risk,filter:sc.filter});
     }catch(e){}
     done++;ST.inv.suggestDone=done;if(done%6===0&&CUR==='invest')render();}};
   const threads=[];for(let i=0;i<ch;i++)threads.push(proc(cands.filter((_,idx)=>idx%ch===i)));
   await Promise.all(threads);
-  res.sort((a,b)=>b.score-a.score);
-  const byMain=res.filter(s=>s.mainIn>0);
-  const top5=(byMain.length>=5?byMain:res).slice(0,5);
-  const avoid=res.filter(s=>s.mainIn<0&&s.score<55).slice(-3).reverse();
+  // 风控：被过滤个股进入「风险提示」，其余按综合分排序
+  const passed=res.filter(r=>r.filter.pass);
+  const blocked=res.filter(r=>!r.filter.pass);
+  const qualified=passed.filter(r=>r.mainIn>0&&r.score>=R.light);     // 主力净流入且达轻仓线以上
+  const top5=(qualified.length>=5?qualified:passed).slice().sort((a,b)=>b.score-a.score).slice(0,5);
+  const weak=passed.filter(r=>r.mainIn<0&&r.score<R.watch).map(r=>({r,tag:'资金背离',why:'主力净流出且综合分 '+r.score+'<'+R.watch}));
+  const avoidAll=blocked.map(r=>({r:r,tag:r.filter.tag,why:r.filter.why})).concat(weak)
+   .sort((a,b)=>(a.r.mainIn||0)-(b.r.mainIn||0)).slice(0,6);
   await trackUpdate([],TODAY);
   D.invest.suggests=D.invest.suggests||[];
   const existing=D.invest.suggests.find(x=>x.date===TODAY);
-  const rec={date:TODAY,ts:Date.now(),
-   picks:top5.map(p=>({code:p.code,name:p.name,secid:p.secid,price:p.price,chg:p.chg,mainIn:p.mainIn,turn:p.turn,score:p.score,advice:p.advice,reasons:p.reasons,buyPrice:p.price})),
-   avoid:avoid.map(p=>({code:p.code,name:p.name,price:p.price,chg:p.chg,mainIn:p.mainIn,score:p.score,advice:p.advice,why:(p.reasons||[]).join('；')}))};
+  const rec={date:TODAY,ts:Date.now(),strategy:cfg.strategy,weights:W,rating:R,
+   cfg:{weights:W,rating:R,risk:cfg.risk,zone:cfg.zone,val:cfg.val,strategy:cfg.strategy},
+   picks:top5.map(p=>({code:p.code,name:p.name,secid:p.secid,price:p.price,chg:p.chg,mainIn:p.mainIn,turn:p.turn,mcap:p.mcap,pe:p.pe,pb:p.pb,score:p.score,advice:p.advice,reasons:p.reasons,dims:p.dims,zone:p.zone,risk:p.risk,buyPrice:p.price})),
+   avoid:avoidAll.map(o=>({code:o.r.code,name:o.r.name,price:o.r.price,chg:o.r.chg,mainIn:o.r.mainIn,score:o.r.score,advice:o.r.advice,tag:o.tag,why:o.why}))};
   if(existing)Object.assign(existing,rec);else D.invest.suggests.push(rec);
   D.invest.suggests=D.invest.suggests.filter(x=>x.date).slice(-30);
   save();
@@ -2546,7 +3106,9 @@ function sugFollow(code){
  const rec=(D.invest.suggests||[]).slice(-1)[0];
  const p=rec&&rec.picks?rec.picks.find(x=>x.code===code):null;
  if(!p){toast('未找到该建议个股信息');return;}
- tracks.push({code:p.code,name:p.name,secid:p.secid,buyPrice:p.price,buyDate:TODAY,advice:p.advice,reasons:p.reasons,m20:p.k?p.k.m20:null,golden:p.k?p.k.golden:null,trend5:p.k?p.k.trend5:null,closed:false,closeDate:null,closeAdvice:null,lastPrice:null,lastChg:null,lastChecked:null,lastReason:null,lastAdvice:null});
+ tracks.push({code:p.code,name:p.name,secid:p.secid,buyPrice:p.price,buyDate:TODAY,advice:p.advice,reasons:p.reasons,risk:p.risk,score:p.score,dims:p.dims,
+   stopLoss:(p.zone&&p.zone.stop)||null,buyLow:(p.zone&&p.zone.buyLow)||null,buyHigh:(p.zone&&p.zone.buyHigh)||null,target:(p.zone&&p.zone.target)||null,
+   m20:p.k?p.k.m20:null,golden:p.k?p.k.golden:null,trend5:p.k?p.k.trend5:null,closed:false,closeDate:null,closeAdvice:null,lastPrice:null,lastChg:null,lastChecked:null,lastReason:null,lastAdvice:null});
  save();if(CUR==='invest')render();toast('已关注并加入持仓跟踪：'+p.name);
  setTimeout(()=>trackUpdate([],TODAY),200);
 }
@@ -2561,6 +3123,46 @@ function sugFollowBtn(code){
 function sugUntrackBtn(code){
  return '<button class="btn" style="margin-left:6px;height:24px;padding:0 6px;font-size:10px;line-height:1.2;border-radius:5px" onclick="sugUnfollow(\''+code+'\')">取消跟踪</button>';
 }
+function sugSetStrategy(st){D.invest.sugCfg=D.invest.sugCfg||{};D.invest.sugCfg.strategy=st;save();toast('模型策略→'+({momentum:'短线强势突破股',breakout:'技术形态突破股',value:'价值低估股'}[st]||st));}
+function sugModelForm(){
+ const c=sugCfg();
+ formM('模型参数微调（数值可改，重新生成后生效）',[
+   {id:'w_t',l:'权重·趋势 Wt (0–1)',t:'number',v:c.weights.Wt,p:'0.38'},
+   {id:'w_c',l:'权重·资金 Wc (0–1)',t:'number',v:c.weights.Wc,p:'0.34'},
+   {id:'w_p',l:'权重·形态 Wp (0–1)',t:'number',v:c.weights.Wp,p:'0.20'},
+   {id:'w_v',l:'权重·估值 Wv (0–1)',t:'number',v:c.weights.Wv,p:'0.08'},
+   {id:'r_s',l:'评级阈值·强买',t:'number',v:c.rating.strong,p:'82'},
+   {id:'r_b',l:'评级阈值·买入',t:'number',v:c.rating.buy,p:'70'},
+   {id:'r_w',l:'评级阈值·关注',t:'number',v:c.rating.watch,p:'58'},
+   {id:'r_l',l:'评级阈值·轻仓',t:'number',v:c.rating.light,p:'46'},
+   {id:'rk_m',l:'风控·最小总市值(亿)',t:'number',v:c.risk.minMcap/1e8,p:'30'},
+   {id:'rk_t',l:'风控·最大换手率(%)',t:'number',v:c.risk.maxTurn,p:'25'},
+   {id:'rk_o',l:'风控·主力出逃阈值(亿)',t:'number',v:c.risk.avoidOutflow/1e8,p:'8'},
+   {id:'z_sp',l:'止损·相对现价幅度(%)',t:'number',v:c.zone.stopPct*100,p:'6'},
+   {id:'z_rr',l:'目标·风险回报比',t:'number',v:c.zone.rr,p:'2'}
+ ],()=>{
+   const g=D.invest.sugCfg=D.invest.sugCfg||{};
+   g.strategy=c.strategy;
+   const w_t=+val('w_t'),w_c=+val('w_c'),w_p=+val('w_p'),w_v=+val('w_v');
+   const sum=(w_t+w_c+w_p+w_v)||1;            // 自动归一化，避免权重和≠1
+   g.weights={Wt:w_t/sum,Wc:w_c/sum,Wp:w_p/sum,Wv:w_v/sum};
+   g.rating={strong:+val('r_s')||82,buy:+val('r_b')||70,watch:+val('r_w')||58,light:+val('r_l')||46};
+   g.risk=Object.assign({},SUG_MODEL.risk,{minMcap:(+val('rk_m')||30)*1e8,maxTurn:+val('rk_t')||25,avoidOutflow:(+val('rk_o')||8)*1e8});
+   g.zone=Object.assign({},SUG_MODEL.zone,{stopPct:(+val('z_sp')||6)/100,rr:+val('z_rr')||2});
+   save();toast('模型参数已保存（权重已自动归一化）');
+ });
+}
+function sugModelSettings(){
+ const c=sugCfg();
+ const stratBtns=['momentum','breakout','value'].map(s=>'<button class="btn '+(c.strategy===s?'pri':'')+'" style="margin:2px" onclick="sugSetStrategy(\''+s+'\')">'+({momentum:'短线强势突破',breakout:'形态突破',value:'价值低估'}[s])+'</button>').join('');
+ openM('选股模型 · 策略与参数',
+   '<div style="font-size:13px;color:var(--ink2);margin-bottom:8px">① 选择筛选目标（切换后权重自动跟随预设）：</div>'+
+   '<div style="margin-bottom:12px">'+stratBtns+'</div>'+
+   '<div style="font-size:13px;color:var(--ink2);margin-bottom:8px">② 微调权重 / 评级阈值 / 风控与止损参数：</div>'+
+   '<button class="btn pri" onclick="sugModelForm()">'+ic('settings',14)+'打开参数微调</button>'+
+   '<div style="font-size:11.5px;color:var(--ink3);line-height:1.6;margin-top:12px">当前策略：<b>'+esc(({momentum:'短线强势突破股',breakout:'技术形态突破股',value:'价值低估股'}[c.strategy]||c.strategy))+'</b>。'+
+   '参数为本地持久化（D.invest.sugCfg），修改后需重新生成今日建议方可生效。所有评分与风控均公开可解释。</div>',false,520);
+}
 function trackSec(open,closed){
  const has=(open.length||closed.length);
  return '<div class="card" style="margin-top:14px"><div class="ch"><h3>'+ic('eye',15)+'持仓跟踪（跨日延续）</h3><span class="sub">买入候选持续跟踪，至卖出信号出现</span><div class="sp"></div>'+
@@ -2568,7 +3170,7 @@ function trackSec(open,closed){
   (has?'<div class="lst">':'')+
   open.map(t=>sugTrackRow(t,false)).join('')+closed.map(t=>sugTrackRow(t,true)).join('')+
   (has?'</div>':'<div class="empty">'+ic('eye',28)+'暂无跟踪中的个股。在「今日精选」点「关注」即可加入跟踪列表，并跨日跟踪直至出现卖出信号。</div>')+
-  '<div style="font-size:11px;color:var(--ink3);line-height:1.6;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">跟踪逻辑：在「今日精选」中点「关注」后，该个股进入跟踪列表，每日刷新时检查现价与买入价关系——触及止损线（-5%）或跌破 20 日线且主力净流出，则给出「卖出」并关闭；否则持续「持有」跟踪。以上均为基于公开行情的量化初判，<b>仅供参考，不构成任何投资建议</b>；投资有风险，决策需谨慎。</div></div>';
+  '<div style="font-size:11px;color:var(--ink3);line-height:1.6;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">跟踪逻辑：在「今日精选」中点「关注」后，该个股进入跟踪列表；每日刷新时检查现价与模型止损位（支撑下方 / 买入价 -6% 硬上限，见买入区间）关系，或是否跌破 20 日线且主力净流出——触发则给出「卖出」并关闭，否则持续「持有」。以上均为基于公开行情的量化初判，<b>仅供参考，不构成任何投资建议</b>；投资有风险，决策需谨慎。</div></div>';
 }
 function invSuggest(){
  const busy=ST.inv.suggestBusy;
@@ -2579,10 +3181,24 @@ function invSuggest(){
  const open=tracks.filter(t=>!t.closed);
  const closed=tracks.filter(t=>t.closed).slice(-6).reverse();
  const tab=(kk,n)=>'<div class="tab'+(ST.inv.sugTab===kk?' on':'')+'" onclick="ST.inv.sugTab=\''+kk+'\';render()">'+n+'</div>';
+ const mcfg=sugCfg(),mw=sugWeights(mcfg);
+ const stratName={momentum:'短线强势突破股',breakout:'技术形态突破股',value:'价值低估股'}[mcfg.strategy]||mcfg.strategy;
+ const modelCard=(ST.inv.sugShowModel?'<div class="card" style="margin-top:10px;font-size:12px;line-height:1.6">'+
+   '<div class="ch"><h3 style="font-size:13px">'+ic('chart',14)+'选股模型 · '+esc(stratName)+'</h3><div class="sp"></div>'+
+   '<button class="btn sm" onclick="ST.inv.sugShowModel=false;render()">收起</button></div>'+
+   '<div style="color:var(--ink2);margin-bottom:6px"><b>筛选目标</b>：'+esc(stratName)+'（趋势向上 + 资金共振 + 技术形态突破）。综合分 0–100 = Σ(权重×维度分)；每个维度分均归一到 0–100（50=中性），可解释、可复盘。</div>'+
+   '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">'+
+     sugDimTag('趋势 '+Math.round(mw.Wt*100)+'%',70)+sugDimTag('资金 '+Math.round(mw.Wc*100)+'%',70)+
+     sugDimTag('形态 '+Math.round(mw.Wp*100)+'%',70)+sugDimTag('估值 '+Math.round(mw.Wv*100)+'%',70)+sugRiskBadge('风控开')+'</div>'+
+   '<div style="color:var(--ink3);font-size:11.5px">数据源：东方财富行情(现价/涨跌幅/换手率/总市值/PE/PB)＋主力净流入(f62)＋日线K线(MA5·10·20·60、量比、突破形态)。'+
+   '评级 强买≥'+mcfg.rating.strong+' 买入≥'+mcfg.rating.buy+' 关注≥'+mcfg.rating.watch+' 轻仓≥'+mcfg.rating.light+'；风控剔除 ST/涨跌停/微盘(<'+(mcfg.risk.minMcap/1e8)+'亿)/高换手(>'+mcfg.risk.maxTurn+'%)/主力大幅出逃。参数可在「调参」中改写并持久化。</div>'+
+   '</div>':'');
  const head='<div class="card" style="margin-top:14px"><div class="invSticky"><div class="ch"><h3>'+ic('bulb',15)+'今日操作建议</h3>'+
   '<div class="sp"></div>'+
-  '<button class="btn sm '+(busy?'gh':'pri')+'" '+(busy?'disabled':'onclick="suggestGen()"')+'>'+ic('zap',14)+(busy?('分析中 '+(ST.inv.suggestDone||0)+'/'+(ST.inv.suggestTotal||0)):(today?'重新生成今日建议':'生成今日建议'))+'</button></div>'+
-  '<div class="tabs" style="margin:4px 0 10px">'+tab('picks','今日精选')+tab('avoid','风险提示')+tab('track','持仓跟踪')+'</div></div>';
+  '<button class="btn sm '+(busy?'gh':'pri')+'" '+(busy?'disabled':'onclick="suggestGen()"')+'>'+ic('zap',14)+(busy?('分析中 '+(ST.inv.suggestDone||0)+'/'+(ST.inv.suggestTotal||0)):(today?'重新生成今日建议':'生成今日建议'))+'</button>'+
+  '<button class="btn sm" onclick="ST.inv.sugShowModel=!ST.inv.sugShowModel;render()">'+ic('chart',14)+'模型</button>'+
+  '<button class="btn sm" onclick="sugModelSettings()">'+ic('settings',14)+'调参</button></div>'+
+  '<div class="tabs" style="margin:4px 0 10px">'+tab('picks','今日精选')+tab('avoid','风险提示')+tab('track','持仓跟踪')+'</div></div>'+modelCard;
  if(busy)return head+'<div class="empty" style="margin-top:0">'+ic('refresh',26)+'<div style="margin-top:8px">正在扫描主板活跃个股并分析趋势 / 资金 / 形态…<br>'+ST.inv.suggestDone+' / '+ST.inv.suggestTotal+'</div></div>';
  const k=ST.inv.sugTab||'picks';
  if(k==='track')return head+trackSec(open,closed);
@@ -2591,25 +3207,33 @@ function invSuggest(){
  if(rec.date!==TODAY)body+='<div style="font-size:12px;color:var(--ink3);background:var(--line2);border-radius:10px;padding:8px 11px;margin-bottom:2px">今日尚未生成，以下为最近一次（'+rec.date+'）建议。点上方「生成今日建议」获取今天的最新结论。</div>';
  if(k==='picks'){
   const picks=rec.picks||[];
-  body+='<div class="card" style="margin-top:14px"><div class="ch"><h3>'+ic('star',15)+'今日精选 · 最优 '+picks.length+' 支</h3><span class="sub">趋势 / 资金 / 形态 共振优选</span></div>'+
+  body+='<div class="card" style="margin-top:14px"><div class="ch"><h3>'+ic('star',15)+'今日精选 · 最优 '+picks.length+' 支</h3><span class="sub">'+esc(stratName)+' · 趋势/资金/形态 共振优选</span></div>'+
    (picks.length?'<div class="lst">'+picks.map((p,i)=>{
     const cls=p.chg>0?'pos':p.chg<0?'neg':'';
+    const z=p.zone||{};const d=p.dims||{};
     const tags=(p.reasons||[]).slice(0,3).map(r=>'<div style="display:flex;gap:6px;align-items:flex-start;font-size:12px;line-height:1.5;color:var(--ink2)"><span style="color:var(--brand)">•</span><span>'+esc(r)+'</span></div>').join('');
+    const dimTags=[d.trend!=null?sugDimTag('趋势',d.trend):'',d.capital!=null?sugDimTag('资金',d.capital):'',d.pattern!=null?sugDimTag('形态',d.pattern):'',d.value!=null?sugDimTag('估值',d.value):''].filter(Boolean).join(' ');
+    const zoneRow=(z.buyLow!=null&&z.buyHigh!=null)?('<div style="display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 2px;font-size:12px">'+
+      '<span style="color:var(--ink2)">买入区间 <b class="num" style="color:var(--brand)">'+num(z.buyLow)+'–'+num(z.buyHigh)+'</b></span>'+
+      '<span style="color:var(--ink2)">止损 <b class="num" style="color:var(--green)">'+num(z.stop)+'</b></span>'+
+      '<span style="color:var(--ink2)">目标 <b class="num" style="color:var(--red)">'+num(z.target)+'</b></span>'+
+      (p.risk?sugRiskBadge(p.risk):'')+'</div>'):'';
     return '<div class="li" style="align-items:flex-start"><div style="width:28px;flex:none;text-align:center;font-weight:800;font-size:16px;color:var(--brand)">'+(i+1)+'</div>'+
      '<div class="gr" style="flex:1;min-width:0"><div class="t1" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+esc(p.name)+' <span style="color:var(--ink3);font-weight:400;font-size:11.5px">'+esc(p.code)+'</span>'+sugWatchBtn(p.code)+sugFollowBtn(p.code)+'</div>'+
-     '<div style="display:flex;gap:10px;align-items:center;margin:3px 0 5px;flex-wrap:wrap"><span class="num '+cls+'" style="font-weight:700;font-size:15px">'+(p.price!=null?num(p.price):'—')+'</span>'+
+     '<div style="display:flex;gap:10px;align-items:center;margin:3px 0 3px;flex-wrap:wrap"><span class="num '+cls+'" style="font-weight:700;font-size:15px">'+(p.price!=null?num(p.price):'—')+'</span>'+
      '<span class="num '+cls+'" style="font-size:12px">'+(p.chg!=null?(p.chg>0?'+':'')+num(p.chg)+'%':'')+'</span>'+
      '<span class="num" style="font-size:12px;color:'+(p.mainIn>=0?'var(--red)':'var(--green)')+'">主力'+flowTxt(p.mainIn)+'</span></div>'+
-     '<div style="margin-bottom:4px">'+tags+'</div></div>'+
+     zoneRow+'<div style="margin:3px 0 4px">'+dimTags+'</div>'+
+     '<div style="margin-bottom:2px">'+tags+'</div></div>'+
      '<div style="flex:none;text-align:right"><div style="font-size:11px;color:var(--ink3)">综合分</div><b class="num" style="font-size:18px">'+p.score+'</b><div style="margin-top:5px">'+sugBadge(p.advice)+'</div></div></div>';
    }).join('')+'</div>':'<div class="empty">'+ic('search',28)+'无符合条件个股</div>')+'</div>';
  }else{
   const avoid=rec.avoid||[];
-  body+='<div class="card" style="margin-top:14px"><div class="ch"><h3>'+ic('alert',15)+'风险提示 · 建议规避</h3><span class="sub">'+avoid.length+' 支需警惕</span></div>'+
+  body+='<div class="card" style="margin-top:14px"><div class="ch"><h3>'+ic('alert',15)+'风险提示 · 建议规避</h3><span class="sub">'+avoid.length+' 支被风控拦截 / 资金背离</span></div>'+
    (avoid.length?'<div class="lst">'+avoid.map(p=>{
     const cls=p.chg>0?'pos':p.chg<0?'neg':'';
     return '<div class="li" style="align-items:flex-start"><div class="gr" style="flex:1;min-width:0"><div class="t1" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+esc(p.name)+' <span style="color:var(--ink3);font-weight:400;font-size:11.5px">'+esc(p.code)+'</span>'+sugWatchBtn(p.code)+'</div>'+
-     '<div class="t2">'+esc(p.why||'')+'</div></div>'+
+     '<div class="t2" style="margin-top:2px">'+sugBadge(p.tag||'规避')+' <span style="margin-left:4px">'+esc(p.why||'')+'</span></div></div>'+
      '<div style="flex:none;text-align:right"><span class="num '+cls+'" style="font-weight:700;font-size:14px">'+(p.price!=null?num(p.price):'—')+'</span><div style="margin-top:5px">'+sugBadge(p.advice)+'</div></div></div>';
    }).join('')+'</div>':'<div class="empty">'+ic('check',28)+'今日无明确规避标的</div>')+'</div>';
  }
@@ -2866,7 +3490,7 @@ function fundLog(fid,act){
   const a=nval('l_a');if(!a){toast('请填写金额');return false}
   D.invest.fundLogs=D.invest.fundLogs||[];
   D.invest.fundLogs.push({id:uid(),fid:fid,act:act,amt:Math.abs(a),date:val('l_d')||TODAY,note:val('l_n')});
-  ST.inv['f_'+fid]=1;save();render();toast('已记录 '+(act==='buy'?'买入':'卖出')+' '+money(a));
+  ST.inv['f_'+fid]=1;save();toast('已记录 '+(act==='buy'?'买入':'卖出')+' '+money(a));
  });
 }
 /* 基金汇总（定投+投顾合计） */
@@ -2932,6 +3556,164 @@ async function loadBriefs(force){
   BRIEFS_TS=Date.now();
   if(CUR==='invest'&&ST.inv.tab==='news') render();
 }
+/* ===== 简报引擎：已部署页面在浏览器端定时生成（盘前 9:00 / 盘后 21:00）并原位更新，手动刷新可即时生成，无需每日重新部署 ===== */
+const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
+const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
+const GLOB_IDX=[['100.DJIA','道琼斯'],['100.SPX','标普500'],['100.NDX','纳斯达克'],['100.HSI','恒生指数']];
+const nv=v=>(v==null||v===''||v==='-')?null:(isNaN(+v)?null:+v);
+function briefSlotNow(h){return (h==null?new Date().getHours():h)>=15?'evening':'morning';}
+async function briefFetchIdx(secids){
+ const url='https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&np=1&secids='+secids.map(x=>x[0]).join(',')+'&fields=f2,f3,f6,f12,f14,f104,f105,f106&ut='+EM_UT;
+ const j=await jsonpGet(url,8000);
+ const d=j&&j.data&&j.data.diff;if(!d)return null;
+ const arr=Array.isArray(d)?d:Object.values(d);
+ return secids.map(([sid,nm])=>{const it=arr.find(x=>String(x.f12)===sid.split('.')[1])||{};
+  return {name:nm,price:nv(it.f2),chg:nv(it.f3),amt:nv(it.f6),up:nv(it.f104),down:nv(it.f105)};});
+}
+async function briefFetchBoards(){
+ const url='https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=90&po=1&np=1&fltt=2&invt=2&fid=f3&fs=m:90+t:2&fields=f12,f14,f3,f62,f128&ut='+EM_UT;
+ const j=await jsonpGet(url,8000);
+ const d=j&&j.data&&j.data.diff;if(!d)return null;
+ const arr=Array.isArray(d)?d:Object.values(d);
+ return arr.map(x=>({code:String(x.f12||''),name:String(x.f14||''),chg:nv(x.f3),main:nv(x.f62),lead:x.f128?String(x.f128):''})).filter(b=>b.name&&b.chg!=null);
+}
+async function briefFetchZT(){
+ const d=new Date(),ds=d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');
+ const url='https://push2ex.eastmoney.com/getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=320&sort=fbt%3Aasc&date='+ds;
+ const j=await jsonpGet(url,8000);
+ const info=j&&j.data&&j.data.info;if(!info||!info.length)return null;
+ const lbs=info.map(x=>nv(x.lbc)||1);
+ return {count:info.length,maxLb:Math.max.apply(null,lbs),zb:info.filter(x=>(nv(x.zbc)||0)>0).length};
+}
+const bpc=v=>v==null?'—':(v>0?'+':'')+num(v)+'%';
+const bamt=v=>{if(v==null)return '—';const a=v/1e8;return a>=10000?(a/10000).toFixed(2)+' 万亿':a.toFixed(0)+' 亿';};
+function bline(b){return b.name+' '+bpc(b.chg)+(b.main!=null?('（主力'+flowTxt(b.main)+'）'):'')+(b.lead?('，领涨股：'+b.lead):'');}
+function briefCompose(slot,dt,gen){
+ const isEve=slot==='evening';
+ const pad2=x=>String(x).padStart(2,'0');
+ const date=gen.getFullYear()+'-'+pad2(gen.getMonth()+1)+'-'+pad2(gen.getDate());
+ const time=pad2(gen.getHours())+':'+pad2(gen.getMinutes());
+ const id='b'+date.replace(/-/g,'')+(isEve?'-pm':'-am');
+ const idx=dt.idx||[],boards=dt.boards||[],glob=dt.glob||[],zt=dt.zt||null;
+ const sh=idx.find(x=>x.name==='上证指数')||{},sz=idx.find(x=>x.name==='深证综指')||{};
+ const disp=idx.filter(x=>['上证指数','深证成指','创业板指','沪深300'].indexOf(x.name)>=0);
+ const up=(sh.up||0)+(sz.up||0),down=(sh.down||0)+(sz.down||0);
+ const twoAmt=(sh.amt!=null&&sz.amt!=null)?(sh.amt+sz.amt):null;
+ const topB=boards.slice(0,5),botB=boards.slice(-5).reverse();
+ const inB=boards.slice().filter(b=>b.main!=null).sort((a,b)=>(b.main||0)-(a.main||0)).slice(0,6);
+ const outB=boards.slice().filter(b=>b.main!=null).sort((a,b)=>(a.main||0)-(b.main||0)).slice(0,3);
+ const gl=glob.filter(g=>g.chg!=null);
+ const idxTxt=disp.map(x=>x.name+' '+bpc(x.chg)).join('，');
+ const summary='今日'+(isEve?'收盘':'盘面')+'：'+(idxTxt||'指数数据待获取')+
+  (twoAmt!=null?('，两市成交 '+bamt(twoAmt)): '')+
+  (up||down?('；涨 '+up+' 家 / 跌 '+down+' 家'):'')+
+  (zt?('；涨停 '+zt.count+' 家、最高 '+zt.maxLb+' 连板'+(zt.zb?('（炸板 '+zt.zb+' 家）'):'')):'')+
+  (topB.length?('。板块：'+topB[0].name+' '+bpc(topB[0].chg)+' 领涨'+(botB.length?('，'+botB[0].name+' '+bpc(botB[0].chg)+' 领跌'):'')+'。'):'。');
+ const points=[];
+ if(idxTxt)points.push('指数：'+idxTxt+(twoAmt!=null?('，两市成交 '+bamt(twoAmt)):'')+(up||down?('，涨 '+up+' 家 / 跌 '+down+' 家'):''));
+ if(topB.length)points.push('领涨板块：'+topB.slice(0,3).map(bline).map(s=>s.split('（')[0]).join('；'));
+ if(botB.length)points.push('领跌板块：'+botB.slice(0,3).map(b=>b.name+' '+bpc(b.chg)).join('；'));
+ if(zt)points.push('涨停 '+zt.count+' 家，最高 '+zt.maxLb+' 连板'+(zt.zb?('，炸板 '+zt.zb+' 家，封板质量'+(zt.zb>zt.count*0.4?'一般':'较好')):''));
+ if(gl.length)points.push('隔夜外围：'+gl.map(g=>g.name+' '+bpc(g.chg)).join('，'));
+ if(inB.length)points.push('主力资金净流入前列：'+inB.slice(0,4).map(b=>b.name+'（'+flowTxt(b.main)+'）').join('、'));
+ const sections={};
+ if(gl.length)sections.overseas=gl.map(g=>g.name+' '+bpc(g.chg)+(g.price!=null?('（'+num(g.price)+' 点）'):'')).join('；')+'。以上为最新收盘快照，外围情绪影响 A 股开盘与科技板块联动。';
+ if(isEve){
+  if(idxTxt)sections.review='收盘 '+idxTxt+'。'+(twoAmt!=null?('两市合计成交 '+bamt(twoAmt)+'，'):'')+(up||down?('全市场上涨 '+up+' 家、下跌 '+down+' 家，'):'')+'赚钱效应'+(up>down*1.5?'偏强':(down>up*1.5?'偏弱':'均衡'))+'。'+(zt?('涨停 '+zt.count+' 家、跌停情绪指标：最高 '+zt.maxLb+' 连板'+(zt.zb?('，炸板 '+zt.zb+' 家'):'')+'。'):'');
+  if(topB.length||botB.length)sections.themes='领涨：'+topB.map(bline).join('；')+'。领跌：'+botB.map(bline).join('；')+'。涨幅榜是否具备持续性，需结合量能与次日开盘验证。';
+  if(inB.length||outB.length)sections.dragon='板块主力资金：净流入 '+inB.slice(0,3).map(b=>b.name+'（'+flowTxt(b.main)+'）').join('、')+'；净流出 '+outB.map(b=>b.name+'（'+flowTxt(b.main)+'）').join('、')+'。资金聚集方向即短线主线方向。';
+ }else{
+  if(idxTxt)sections.auction='盘面快照：'+idxTxt+'。'+(up||down?('当前上涨 '+up+' 家、下跌 '+down+' 家，市场情绪'+(up>down?'偏暖':(down>up?'偏冷':'均衡'))+'。'):'')+'竞价/盘中量价匹配情况以实时行情为准。';
+  if(zt)sections.ladder='涨停 '+zt.count+' 家，最高 '+zt.maxLb+' 连板'+(zt.zb?('，炸板 '+zt.zb+' 家'):'')+'。连板高度与封板率反映短线情绪周期位置，高位断板需警惕退潮。';
+  if(topB.length)sections.industry='行业板块领涨：'+topB.map(bline).join('；')+'。领跌：'+(botB.length?botB.slice(0,3).map(bline).join('；'):'无')+'。';
+ }
+ const bm=(D.invest&&D.invest.boardMembers)||{};
+ const track=inB.map(b=>{
+  const cached=b.code&&bm[b.code];
+  return {
+   n:b.name+'（主力'+flowTxt(b.main)+'，今日'+bpc(b.chg)+'）',
+   s:'实时资金流向排序，个股请结合基本面与自选池筛选',
+   code:b.code,
+   lead:b.lead,
+   members:cached&&cached.members?cached.members.slice(0,5):null
+  };
+ });
+ const avoid=outB.filter(b=>(b.main||0)<0).map(b=>b.name+'（主力净流出'+flowTxt(-Math.abs(b.main))+',资金撤离方向）');
+ return {id,slot,date,ts:date+'T'+time+':00+08:00',market:'A股沪深',summary,points,sections,track,avoid,live:true,genTs:Date.now(),
+  detail:'本简报由页面在浏览器端定时生成（盘前 9:00 / 盘后 21:00 自动触发，页面打开期间准点更新、打开时自动补齐当日到点简报）；未到定时点时可点「立即生成」即时抓取最新市场数据生成本时段简报，定时到点后仍会自动补齐。数据来自东方财富公开行情接口，板块与资金为量化快照，政策消息类内容以存档简报为准。'};
+}
+async function briefGenLive(slot,force){
+ if(!ST.inv)return;
+ if(ST.inv.briefBusy){ if(force)ST.inv.briefPending=true; return; } // 定时/手动同时在跑：手动刷新挂起排队，完成后自动补跑，互不冲突
+ if(!force&&Date.now()-(ST.inv.briefLastGen||0)<5*60*1000)return;
+ ST.inv.briefBusy=true;ST.inv.briefLastGen=Date.now();
+ if(CUR==='invest'&&ST.inv.tab==='news')render();
+ try{
+  slot=slot||briefSlotNow();
+  const [idx,boards,glob,zt]=await Promise.all([
+   briefFetchIdx(LIVE_IDX).catch(()=>null),
+   briefFetchBoards().catch(()=>null),
+   briefFetchIdx(GLOB_IDX).catch(()=>null),
+   briefFetchZT().catch(()=>null)
+  ]);
+  if(!idx&&!boards&&!glob){ST.inv.briefFailTs=Date.now();if(force)toast('简报数据抓取失败（接口限流/离线），稍后重试');return;}
+  // 顺手抓 6 个行业 Top3 板块的成分股，缓存到 boardMembers（让「近期适合追踪」下方可展开个股 chip）
+  try{
+   if(boards&&Array.isArray(boards)&&typeof trackBoardMembers==='function'){
+    D.invest.boardMembers=D.invest.boardMembers||{};
+    const top3=boards.slice().sort((a,b)=>(b.main||0)-(a.main||0)).slice(0,6).filter(b=>b.code&&!D.invest.boardMembers[b.code]);
+    for(let i=0;i<top3.length;i+=2){
+     const batch=top3.slice(i,i+2);
+     const r=await Promise.all(batch.map(b=>trackBoardMembers(b.code).then(m=>({code:b.code,members:m}))));
+     r.forEach(x=>{if(x.members&&x.members.length)D.invest.boardMembers[x.code]={members:x.members,ts:Date.now()}});
+    }
+   }
+  }catch(e){}
+  const b=briefCompose(slot,{idx,boards,glob,zt},new Date());
+  D.invest.liveBriefs=D.invest.liveBriefs||{};
+  D.invest.liveBriefs[b.id]=b;save();
+  ST.inv.briefFailTs=0;
+  if(force)toast('简报已生成（'+b.ts.slice(11,16)+' · '+(slot==='evening'?'盘后':'盘前')+'）');
+ }catch(e){ST.inv.briefFailTs=Date.now();if(force)toast('简报生成失败，稍后重试');}
+ finally{
+  ST.inv.briefBusy=false;
+  const pend=ST.inv.briefPending;ST.inv.briefPending=false;
+  if(CUR==='invest'&&ST.inv.tab==='news')render();
+  if(pend)setTimeout(function(){briefGenLive(null,true)},80); // 排队中的手动刷新补跑
+ }
+}
+/* ===== 简报定时调度：盘前 9:00 / 盘后 21:00 各自动生成一次；未到定时点时手动「立即生成」可即时拉取数据生成，定时到点仍会补齐 ===== */
+const BRIEF_SCHED={morning:9,evening:21};
+function briefSchedId(slot,d){
+ const p=x=>String(x).padStart(2,'0');
+ return 'b'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+(slot==='evening'?'-pm':'-am');
+}
+function briefSchedAt(slot,d){const at=new Date(d.getTime());at.setHours(BRIEF_SCHED[slot],0,0,0);return at.getTime();}
+/* 返回当前「已到定时点但尚未按定时点生成」的时段；手动提前生成（genTs 早于定时点）不取消定时补齐 */
+function briefSchedDue(now){
+ now=now||new Date();
+ for(const slot of ['morning','evening']){
+  const at=briefSchedAt(slot,now);
+  if(now.getTime()<at)continue;
+  const cur=(D.invest.liveBriefs||{})[briefSchedId(slot,now)];
+  if(!cur||(cur.genTs||0)<at)return slot;
+ }
+ return null;
+}
+/* 下一次自动生成时刻（界面提示用） */
+function briefNextTxt(now){
+ now=now||new Date();
+ if(now.getHours()<BRIEF_SCHED.morning)return '今日 9:00 盘前';
+ if(now.getHours()<BRIEF_SCHED.evening)return '今日 21:00 盘后';
+ return '明日 9:00 盘前';
+}
+function briefSchedRun(){
+ if(!ST.inv)return;
+ const slot=briefSchedDue();
+ if(!slot)return;
+ if(Date.now()-(ST.inv.briefFailTs||0)<5*60*1000)return; // 抓取失败退避 5 分钟，避免定时循环重试刷屏
+ briefGenLive(slot,true);
+}
 const SEC_CLS={'半导体':'p','芯片':'p','集成电路':'p','新能源':'g','光伏':'g','锂电':'g','储能':'g','电动车':'g','汽车':'g','医药':'r','医疗':'r','创新药':'r','消费':'o','白酒':'o','食品':'o','家电':'o','金融':'b','银行':'b','券商':'b','保险':'b','地产':'y','军工':'p','科技':'p','AI':'p','人工智能':'p','机器人':'p','计算机':'p','电子':'p','通信':'b','传媒':'y','农业':'g','有色':'y','煤炭':'y','钢铁':'y','化工':'b','电力':'b','港股':'o','美股':'b','军工电子':'p','低空经济':'p','商业航天':'p'};
 function invNews(){
   if(BRIEFS===null||Date.now()-BRIEFS_TS>300000) loadBriefs();
@@ -2939,7 +3721,10 @@ function invNews(){
   const bq=(ST.inv.bq||'').trim();
   const bslot=ST.inv.bslot||'';
   const bdate=(ST.inv.bdate||'').trim();
-  let list=(BRIEFS||[]).slice().sort((a,b)=>String(b.ts||b.date).localeCompare(String(a.ts||a.date)));
+  const liveMap=(D.invest.liveBriefs=D.invest.liveBriefs||{});
+  let all=(BRIEFS||[]).slice();
+  Object.keys(liveMap).forEach(k=>{const i=all.findIndex(x=>x.id===k);if(i>=0)all[i]=liveMap[k];else all.push(liveMap[k]);});
+  let list=all.sort((a,b)=>String(b.ts||b.date).localeCompare(String(a.ts||a.date)));
   const hasF=bslot||bdate||bq;
   if(hasF){
     const q=bq.toLowerCase();
@@ -2964,15 +3749,16 @@ function invNews(){
     '<button class="btn sm pri" onclick="ST.inv.bq=this.previousElementSibling.value;render()">搜索</button>'+
     (hasF?'<button class="btn sm" onclick="ST.inv.bq=\'\';ST.inv.bslot=\'\';ST.inv.bdate=\'\';render()">清除</button>':'')+
     '</div>';
+  const mslot=briefSlotNow();
   return '<div class="card"><div class="ch"><h3>'+ic('bulb',15)+'每日市场简报</h3>'+
-   '<span class="sub">A股沪深 · 每日 9:30 盘前 / 21:00 盘后，按时间倒序留存</span><div class="sp"></div>'+
-   '<button class="btn sm" onclick="loadBriefs(true)">'+ic('refresh',13)+'刷新</button></div>'+
+   '<span class="sub">A股沪深 · 每日 9:00 盘前 / 21:00 盘后定时生成 · 下次：'+briefNextTxt()+'</span><div class="sp"></div>'+
+   '<button class="btn sm '+(ST.inv.briefBusy?'gh':'pri')+'" onclick="briefGenLive(null,true)" title="未到定时点也可立即拉取最新市场数据生成本时段简报">'+ic('refresh',13)+(ST.inv.briefBusy?'生成中…':('立即生成'+(mslot==='evening'?'盘后':'盘前')))+'</button></div>'+
    (BRIEFS===null?'<div class="empty">'+ic('clock',28)+'正在加载简报…</div>':
     (hasF?fbar:'')+
     (list.length?
-      (hasF?'<div class="sub" style="margin:2px 2px 8px">命中 '+list.length+' / '+((BRIEFS||[]).length)+' 条</div>':'')+
+      (hasF?'<div class="sub" style="margin:2px 2px 8px">命中 '+list.length+' / '+all.length+' 条</div>':'')+
       '<div style="display:flex;flex-direction:column;gap:10px">'+list.map(b=>briefCard(b,M[b.id]||{})).join('')+'</div>'
-    :'<div class="empty">'+ic('bulb',30)+(hasF?'没有符合筛选条件的简报':'暂无简报，每日 9:30 盘前 / 21:00 盘后自动更新')+'</div>')
+    :'<div class="empty">'+ic('bulb',30)+(hasF?'没有符合筛选条件的简报':'暂无简报：每日 9:00 / 21:00 自动生成（下次 '+briefNextTxt()+'），也可点右上角按钮立即生成')+'</div>')
    )+'</div>';
 }
 const MORN_SECS=[
@@ -3014,10 +3800,23 @@ function briefCard(b,m){
   const TA_A=['r','o','p','y'];
   const track=(b.track||[]).map((t,i)=>{
     const it=typeof t==='string'?{n:t,s:''}:t;
-    return '<div style="display:flex;flex-direction:column;gap:2px">'+
-      '<span class="tag '+TA_T[i%TA_T.length]+'">'+esc(it.n||'')+'</span>'+
-      (it.s?'<span style="font-size:10.5px;color:var(--ink2);line-height:1.45;max-width:160px">'+esc(it.s)+'</span>':'')+
-      '</div>';
+    const mems=(it.members&&it.members.length)?it.members:null;
+    const hasLead=!mems&&it.lead&&it.lead!=='—';
+    const memsHtml=(mems||hasLead)?'<div style="margin:2px 0 0 22px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">'+
+      (mems?mems.map(m=>{
+       const cls=(m.chg||0)>0?'r':(m.chg||0)<0?'g':'b';
+       return '<span class="tag '+cls+'" style="font-size:10.5px;padding:2px 7px" title="'+(m.code?esc(m.code)+' · ':'')+'市值 '+(m.mcap?(m.mcap/1e8).toFixed(0)+'亿':'-')+' · 净入 '+flowTxt(m.mainIn||0)+'">'+
+        esc(m.name)+(m.code?' <span style="opacity:.7;font-size:10px">'+esc(m.code)+'</span>':'')+'</span>';
+      }).join('')
+       :'<span class="tag" style="font-size:10.5px;padding:2px 7px;color:var(--brand);background:var(--brand)1a;border:1px solid var(--brand)55">⭐ '+esc(it.lead)+'（板块领涨股 · 可点刷新看完整成分股）</span>'
+      )+
+      '<span class="tag" style="font-size:10.5px;padding:2px 7px;color:var(--ink3);background:#f4f4f4">建议关注</span>'+
+      '</div>':'';
+    return '<div style="display:flex;flex-direction:column;gap:1px;margin-bottom:3px">'+
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+
+        '<span class="tag '+TA_T[i%TA_T.length]+'">'+esc(it.n||'')+'</span>'+
+        (it.s?'<span style="font-size:10.5px;color:var(--ink2);line-height:1.45;max-width:160px">'+esc(it.s)+'</span>':'')+
+      '</div>'+memsHtml+'</div>';
   }).join('');
   const avoid=(b.avoid||[]).map((s,i)=>'<span class="tag '+TA_A[i%TA_A.length]+'">'+esc(s)+'</span>').join(' ');
   const hasTA=((b.track&&b.track.length)||(b.avoid&&b.avoid.length));
@@ -3039,6 +3838,7 @@ function briefCard(b,m){
   return '<div style="border:1px solid var(--line);border-radius:12px;padding:11px 13px;background:#fff">'+
    '<div style="display:flex;align-items:center;gap:7px;margin-bottom:7px;flex-wrap:wrap">'+
     '<span class="tag '+slotCls+'">'+slot+'</span>'+
+    (b.live?'<span class="tag g" title="浏览器端定时（9:00/21:00）或手动立即生成，数据抓取自公开行情接口">页面生成 · '+(String(b.ts||'').slice(11,16)||'')+'</span>':'')+
     '<b style="font-size:13px">'+esc(b.date||'')+'</b>'+
     '<span style="font-size:11px;color:var(--ink3);flex:1">'+esc(b.market||'A股')+'</span>'+
     '<button class="btn sm gh" onmousedown="event.preventDefault()" onclick="briefHl(\''+b.id+'\')" title="选中正文文字后点此高亮" style="'+(m.hl&&m.hl.length?'color:var(--brand)':'opacity:.5')+'">'+ic('star',13)+'</button>'+
@@ -3075,17 +3875,17 @@ function briefHl(id){
   const m=M[id]||(M[id]={});
   m.hl=m.hl||[];
   if(m.hl.indexOf(txt)>=0){ toast('该文字已高亮'); return; }
-  m.hl.push(txt); save(); render();
+  m.hl.push(txt); save();
 }
 function briefHlDel(id,i){
   const m=(D.invest.briefMarks=D.invest.briefMarks||{})[id];
   if(!m||!m.hl)return;
-  m.hl.splice(i,1); save(); render();
+  m.hl.splice(i,1); save();
 }
 function briefHlClear(id){
   const m=(D.invest.briefMarks=D.invest.briefMarks||{})[id];
   if(!m||!m.hl)return;
-  m.hl=[]; save(); render();
+  m.hl=[]; save();
 }
 function briefNote(id){
   const m=(D.invest.briefMarks=D.invest.briefMarks||{})[id]||(D.invest.briefMarks[id]={});
@@ -4016,7 +4816,7 @@ function digIgnoredList(){
 function digUnignore(id){
  if(!id)return;
  D.digital.ignoreGoods=(D.digital.ignoreGoods||[]).filter(x=>x!==id);
- save();renderToday();
+ save();
  if(ST.cur==='digital')render();
  digIgnoredList();
  toast('已恢复，将重新出现在「今天要处理」');
@@ -4025,7 +4825,7 @@ function digUnignoreAll(){
  const n=(D.digital.ignoreGoods||[]).length;
  if(!n){toast('没有可恢复的');return}
  D.digital.ignoreGoods=[];
- save();renderToday();
+ save();
  if(ST.cur==='digital')render();
  digIgnoredList();
  toast('已恢复全部 '+n+' 项');
@@ -4358,8 +5158,23 @@ if(!MODS.some(m=>m.k===CUR))CUR='calendar';
 window.addEventListener('hashchange',()=>{const k=(location.hash||'#calendar').slice(1);
  if(k!==CUR&&MODS.some(m=>m.k===k)){CUR=k;render()}});
 render();
+/* 市场简报定时生成：盘前 9:00 / 盘后 21:00 自动触发；页面加载/浏览器刷新时自动补齐当日到点未生成的简报；手动「立即生成」随时可用，与定时互不冲突 */
+try{briefSchedRun();}catch(e){}
+setInterval(function(){try{briefSchedRun()}catch(e){}},60*1000);
 if('serviceWorker' in navigator&&location.protocol.startsWith('http'))
  navigator.serviceWorker.register('sw.js').catch(()=>{});
+/* 应用内「安装到桌面」按钮：主动捕获 beforeinstallprompt，不依赖地址栏图标 */
+(function(){
+ let dp=null;
+ const btn=document.createElement('button');
+ btn.className='btn install-pill';
+ btn.textContent='⬇ 安装到桌面';
+ btn.style.cssText='position:fixed;right:14px;bottom:14px;z-index:80;display:none;box-shadow:0 8px 22px rgba(232,112,58,.38);font-weight:700';
+ btn.onclick=()=>{ if(!dp)return; dp.prompt(); dp.userChoice.then(()=>{dp=null;btn.style.display='none'}).catch(()=>{}); };
+ document.body.appendChild(btn);
+ window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); dp=e; btn.style.display=''; });
+ window.addEventListener('appinstalled',()=>{ dp=null; btn.style.display='none'; });
+})();
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeM()});
 </script>
 
