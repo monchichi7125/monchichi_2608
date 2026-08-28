@@ -380,7 +380,7 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
 .study-tbl td{padding:8px 11px;border-bottom:1px solid var(--line2);vertical-align:top;border-right:1px solid var(--line2);line-height:1.55}
 .study-tbl tr.srow:hover{background:#fcf7f3}
 .study-tbl .sd{color:var(--ink2);font-weight:600;white-space:nowrap;width:62px}
-.study-tbl .st{color:var(--ink)}
+.study-tbl .st{color:var(--ink);min-width:160px}
 .study-tbl .sr{color:var(--ink2);font-size:12px;width:115px;word-break:break-word}
 .study-tbl td[rowspan]{vertical-align:middle}
 /* 折叠：月度 / 周 */
@@ -410,6 +410,27 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
 .study-tbl .se{width:58px;text-align:center;vertical-align:middle}
 .seditbtn{border:none;background:transparent;color:var(--ink3);cursor:pointer;font-size:14px;padding:4px 7px;border-radius:6px;line-height:1;transition:.12s}
 .seditbtn:hover{background:var(--soft);color:var(--brand)}
+/* 学习打卡 · 移动端堆叠卡片（窄屏替代表格，弹性 Flexbox 布局） */
+.study-list{display:none}
+.study-list .scard{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:9px 0;background:var(--card);box-shadow:0 5px 12px -9px rgba(50,35,20,.2)}
+.study-list .scard.done{background:var(--green-s)}
+.study-list .sl{display:flex;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line2);font-size:13px;line-height:1.55}
+.study-list .sl:last-child{border-bottom:none}
+.study-list .sl.inline{align-items:center}
+.study-list .sk{flex:0 0 74px;color:var(--brand);font-weight:600;font-size:12px;padding-top:1px}
+.study-list .sv{color:var(--ink);flex:1;min-width:0;word-break:break-word}
+.study-list .sccb{display:inline-flex;align-items:center;gap:7px;cursor:pointer;color:var(--ink2);font-size:12.5px}
+.study-list .scb{width:17px;height:17px;accent-color:var(--green);cursor:pointer}
+.study-list .scard.done .scb{accent-color:var(--green)}
+.study-list .sdate{width:100%;max-width:180px;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:12px;color:var(--ink);background:#fff;font-family:inherit;box-sizing:border-box}
+.study-list .scard.done .sdate{border-color:#c4e6da;background:#f3faf7}
+.study-list .seditbtn{border:1px solid var(--line);background:var(--soft);color:var(--brand);cursor:pointer;font-size:13px;padding:5px 12px;border-radius:8px;line-height:1;transition:.12s}
+.study-list .seditbtn:hover{background:var(--brand);color:#fff}
+/* 窄屏（≤720px）：隐藏表格，改为逐行堆叠卡片；列宽随视口自适应 */
+@media(max-width:720px){
+  .study-tbl{display:none}
+  .study-list{display:block}
+}
 </style>
 </head>
 <body>
@@ -2751,8 +2772,10 @@ async function trackBoardMembers(bkCode){
    code:String(x.f12),name:String(x.f14||x.f12),chg:+x.f3,mainIn:+x.f62||0,mcap:+x.f60||0,
    pe:x.f116==='-'?null:+x.f116,pb:x.f117==='-'?null:+x.f117,turn:+x.f168||0
   })).filter(s=>s.code&&s.name&&!/ST|退/.test(s.name));
-  // 基本阈值筛选：市值 ≥ 30 亿、PE ∈ [0,200]、PB ≤ 15、换手 ≥ 0.5、非涨跌停
+  // 基本阈值筛选：仅 A 股主板（沪市 60 / 深市 000·001·002·003，排除 科创板 688、创业板 300/301、北交所 8xx）、市值 ≥ 30 亿、PE ∈ [0,200]、PB ≤ 15、换手 ≥ 0.5、非涨跌停
+  const MB=/^(60|000|001|002|003)/;
   const filt=arr.filter(s=>
+   MB.test(s.code)&&
    (s.mcap===0||s.mcap>=30e8)&&
    (s.pe==null||(s.pe>=0&&s.pe<=200))&&
    (s.pb==null||s.pb<=15)&&
@@ -3889,6 +3912,11 @@ function briefSchedRun(){
 }
 const SEC_CLS={'半导体':'p','芯片':'p','集成电路':'p','新能源':'g','光伏':'g','锂电':'g','储能':'g','电动车':'g','汽车':'g','医药':'r','医疗':'r','创新药':'r','消费':'o','白酒':'o','食品':'o','家电':'o','金融':'b','银行':'b','券商':'b','保险':'b','地产':'y','军工':'p','科技':'p','AI':'p','人工智能':'p','机器人':'p','计算机':'p','电子':'p','通信':'b','传媒':'y','农业':'g','有色':'y','煤炭':'y','钢铁':'y','化工':'b','电力':'b','港股':'o','美股':'b','军工电子':'p','低空经济':'p','商业航天':'p'};
 function invNews(){
+  const bslotCur=ST.inv.briefSlot||'morning';
+  const btab=(k,label)=>'<div class="tab'+(bslotCur===k?' on':'')+'" onclick="ST.inv.briefSlot=\''+k+'\';render()">'+label+'</div>';
+  const bbar='<div class="tabs" style="margin-bottom:14px">'+btab('morning','盘前简报')+btab('evening','盘后简报')+btab('all','全部简报')+'</div>';
+  if(bslotCur==='morning') return bbar+briefPage('morning');
+  if(bslotCur==='evening') return bbar+briefPage('evening');
   if(BRIEFS===null||Date.now()-BRIEFS_TS>300000) loadBriefs();
   const M=(D.invest.briefMarks=D.invest.briefMarks||{});
   const bq=(ST.inv.bq||'').trim();
@@ -3939,7 +3967,7 @@ function invNews(){
     (hasF?'<button class="btn sm" onclick="ST.inv.bq=\'\';ST.inv.bslot=\'\';ST.inv.bdate=\'\';render()">清除</button>':'')+
     '</div>';
   const mslot=briefSlotNow();
-  return '<div class="card"><div class="ch"><h3>'+ic('bulb',15)+'每日市场简报</h3>'+
+  return bbar+'<div class="card"><div class="ch"><h3>'+ic('bulb',15)+'每日市场简报</h3>'+
    '<span class="sub">A股沪深 · 每日 9:00 盘前 / 21:00 盘后定时生成 · 下次：'+briefNextTxt()+'</span><div class="sp"></div>'+
    '<button class="btn sm '+(ST.inv.briefBusy?'gh':'pri')+'" onclick="briefGenLive(null,true)" title="未到定时点也可立即拉取最新市场数据生成本时段简报">'+ic('refresh',13)+(ST.inv.briefBusy?'生成中…':('立即生成'+(mslot==='evening'?'盘后':'盘前')))+'</button></div>'+
    (BRIEFS===null?'<div class="empty">'+ic('clock',28)+'正在加载简报…</div>':
@@ -3989,18 +4017,18 @@ function briefCard(b,m){
   const TA_A=['r','o','p','y'];
   const track=(b.track||[]).map((t,i)=>{
     const it=typeof t==='string'?{n:t,s:''}:t;
-    const mems=(it.members&&it.members.length)?it.members:null;
-    // 个股名小字、纯文本、无底色、统一深灰/浅黑（用户要求：不按涨跌彩色区分）
-    const memsHtml=mems?'<div style="margin:2px 0 0 22px;font-size:11.5px;line-height:1.65;color:var(--ink2)">'+
-      mems.map((m,idx)=>{
-       const sep=idx>0?'<span style="color:var(--ink3);opacity:.5;margin:0 4px">/</span>':'';
-       return sep+'<span style="color:var(--ink2)">'+esc(m.name)+'</span>';
-      }).join('')+
+    // 个股来源：优先用结构化 members（实时抓取、已主板过滤）；否则用简报 authored「适合关注」文本 s（已校验为主板个股）
+    let stocks=[];
+    if(it.members&&it.members.length) stocks=it.members.map(m=>m.name);
+    else if(it.s&&/[、，,]/.test(it.s)) stocks=it.s.split(/[、，,\/\s]+/).map(z=>z.trim()).filter(Boolean);
+    // 灰色字体展示，不加任何涨跌颜色标记
+    const stocksHtml=stocks.length?'<div style="margin:3px 0 2px 22px;font-size:11.5px;line-height:1.75;color:var(--ink2)">'+
+      stocks.map(n=>'<span style="color:var(--ink2)">'+esc(n)+'</span>').join('<span style="color:var(--ink3);opacity:.55;margin:0 5px">·</span>')+
       '</div>':'';
-    return '<div style="display:flex;flex-direction:column;gap:1px;margin-bottom:3px">'+
+    return '<div style="display:flex;flex-direction:column;gap:1px;margin-bottom:4px">'+
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+
         '<span class="tag '+TA_T[i%TA_T.length]+'">'+esc(it.n||'')+'</span>'+
-      '</div>'+memsHtml+'</div>';
+      '</div>'+stocksHtml+'</div>';
   }).join('');
   const avoid=(b.avoid||[]).map((s,i)=>'<span class="tag '+TA_A[i%TA_A.length]+'">'+esc(s)+'</span>').join(' ');
   const hasTA=((b.track&&b.track.length)||(b.avoid&&b.avoid.length));
@@ -4036,6 +4064,64 @@ function briefCard(b,m){
    (open?'<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line2);font-size:12px;color:var(--ink2);white-space:pre-wrap;line-height:1.7">'+hlText(b.detail||'（无更多详情）',m.hl)+'</div>':'')+
    noteHtml+
    '</div>';
+}
+/* ===== 盘前 / 盘后 子页面：嵌套于「理财炒股 → 每日简报」标签内（invNews 顶部子标签切换：盘前简报 / 盘后简报 / 全部简报），复用简报引擎数据与卡片、按 slot 过滤；生成仍由浏览器端 briefSchedRun（9:00 盘前 / 21:00 盘后）驱动，不新增任何定时任务 / 通知 / 邮件 ===== */
+/* 合并 briefs.json（服务端 AI 深度存档，叙事/板块解读权威）与 liveBriefs（浏览器端定时或手动生成），按 id 去重、存档解读优先 */
+function briefMerged(){
+  const liveMap=(D.invest.liveBriefs=D.invest.liveBriefs||{});
+  const archiveIds=new Set((BRIEFS||[]).map(x=>x.id));
+  let all=(BRIEFS||[]).slice();
+  Object.keys(liveMap).forEach(k=>{ if(!all.find(x=>x.id===k)) all.push(liveMap[k]); });
+  return all.map(b=>{
+    const lv=liveMap[b.id];
+    if(!lv) return Object.assign({},b,{_src:'ai'});                 // 仅存档：标记 AI 深度来源
+    if(!archiveIds.has(b.id)) return b;                            // 仅实时（无存档）：保留原样
+    const out=Object.assign({},b);                                 // 存档+实时同 id：存档解读优先，实时仅补缺
+    out.sections=Object.assign({},lv.sections||{},b.sections||{});
+    ['summary','detail'].forEach(f=>{ if(!out[f]&&lv[f]) out[f]=lv[f]; });
+    if(!(b.points&&b.points.length)&&lv.points) out.points=lv.points;
+    if(!(b.track&&b.track.length)&&lv.track) out.track=lv.track;
+    if(!(b.avoid&&b.avoid.length)&&lv.avoid) out.avoid=lv.avoid;
+    out._src='ai';
+    return out;
+  });
+}
+/* 单个子页面：顶部今日该 slot 简报（若已生成则静态固化展示），下方历史同 slot 简报列表；未生成给出引导；复用 briefCard 全部高亮/笔记/展开能力 */
+function briefPage(slot){
+  const isEve=slot==='evening';
+  const slotLabel=isEve?'盘后':'盘前';
+  const slotHour=BRIEF_SCHED[slot];
+  const todayId=briefSchedId(slot,new Date());
+  const M=(D.invest.briefMarks=D.invest.briefMarks||{});
+  if(BRIEFS===null||Date.now()-BRIEFS_TS>300000) loadBriefs();
+  const all=briefMerged().filter(b=>b.slot===slot)
+    .sort((a,b)=>String(b.date||b.ts||'').localeCompare(String(a.date||a.ts||'')));
+  const today=all.find(b=>b.id===todayId)||null;
+  const hist=all.filter(b=>b.id!==todayId);
+  const busy=!!ST.inv.briefBusy;
+  const nextTxt=briefNextTxt();
+  const sameSlotNow=briefSlotNow()===slot;
+  const head='<div class="card"><div class="ch"><h3>'+ic(isEve?'moon':'sun',15)+slotLabel+'简报</h3>'+
+    '<span class="sub">A股沪深 · 每日 '+slotHour+':00 '+slotLabel+'定时生成 · 下次：'+nextTxt+'</span><div class="sp"></div>'+
+    '<button class="btn sm '+(busy?'gh':'pri')+'" onclick="briefGenLive(\''+slot+'\',true)" title="未到定时点也可立即拉取最新市场数据生成当日'+slotLabel+'简报">'+ic('refresh',13)+(busy?'生成中…':'立即生成'+slotLabel)+'</button></div>';
+  if(BRIEFS===null) return head+'<div class="empty">'+ic('clock',28)+'正在加载简报…</div></div>';
+  let body='';
+  if(today){
+    body+='<div class="sub" style="margin:2px 2px 8px">今日（'+esc(today.date||'')+'）'+slotLabel+'简报 · 已生成并固化，刷新不改动</div>'+
+      briefCard(today,M[today.id]||{});
+  }else{
+    body+='<div class="empty" style="margin:6px 0 10px">'+ic('clock',26)+'今日'+slotLabel+'简报尚未生成'+
+      (sameSlotNow?'：当前处于'+slotLabel+'时段，点右上角「立即生成'+slotLabel+'」可即时拉取，或等待 '+slotHour+':00 自动生成'
+                  :'：将于今日 '+slotHour+':00 自动生成')+'</div>';
+  }
+  if(hist.length){
+    body+='<div class="sub" style="margin:14px 2px 8px">历史'+slotLabel+'简报（'+hist.length+' 篇）</div>'+
+      '<div style="display:flex;flex-direction:column;gap:10px">'+hist.map(b=>briefCard(b,M[b.id]||{})).join('')+'</div>';
+  }
+  if(!today&&!hist.length){
+    body='<div class="empty">'+ic('bulb',30)+'暂无'+slotLabel+'简报：每日 '+slotHour+':00 自动生成（下次 '+nextTxt+'），也可点右上角按钮立即生成</div>';
+  }
+  return head+body+'</div>';
 }
 function hlText(raw,hl){
   if(!raw)return '';
@@ -4607,6 +4693,20 @@ function R_study(){
         '</tr>';
       });
       h+='</tbody></table>';
+      /* 移动端：每行为独立堆叠卡片（窄屏显示，桌面隐藏） */
+      h+='<div class="study-list">';
+      its.forEach(it=>{
+        const rec=R[it.key]||{},dc=rec.done?' done':'';
+        h+='<div class="scard srow'+dc+'" data-skey="'+it.key+'">'+
+          (it.d?'<div class="sl"><span class="sk">日</span><b>'+esc(it.d)+'</b></div>':'')+
+          '<div class="sl"><span class="sk">学习任务</span><span class="sv">'+ (it.star?'✨ ':'') + esc(seTask(it)) +'</span></div>'+
+          '<div class="sl"><span class="sk">要求</span><span class="sv">'+ esc(seReq(it)) +'</span></div>'+
+          '<div class="sl inline"><span class="sk">完成</span><label class="sccb"><input type="checkbox" class="scb" '+ (rec.done?'checked':'') +' onclick="studyCheck(this,\''+ it.key +'\')"> 标记完成</label></div>'+
+          '<div class="sl inline"><span class="sk">打卡日期</span><input type="date" class="sdate" value="'+ (rec.date||'') +'" onchange="studySetDate(\''+ it.key +'\',this.value)"></div>'+
+          '<div class="sl inline"><span class="sk">编辑</span><button class="seditbtn" onclick="studyEdit(\''+ it.key +'\')">✎ 编辑本行</button></div>'+
+        '</div>';
+      });
+      h+='</div>';
       h+='</details>';
     });
     h+='</details>';
