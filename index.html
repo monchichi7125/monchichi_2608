@@ -370,6 +370,46 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
 @media(max-width:400px){.g2.keep2{grid-template-columns:repeat(2,1fr)}.day{min-height:44px}.day .top{top:4px}.day .n{font-size:12px}.day .sm{font-size:8px}.calhead .ym{font-size:14px}.wk div{font-size:10px}.days,.wk{gap:1px}}
 .g2.keep2,.g3.keep3,.g4.keep4{}
 @media(max-width:900px){.g4.keep4{grid-template-columns:repeat(2,1fr)}.g2.keep2{grid-template-columns:repeat(2,1fr)}}
+/* ==================== 学习打卡 ==================== */
+.study-tbl{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+.study-tbl th{position:sticky;top:139px;z-index:40;background:var(--soft);color:var(--brand);font-weight:600;text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap;box-shadow:0 2px 7px -3px rgba(50,35,20,.22)}
+.study-tbl thead th:first-child{border-top-left-radius:var(--r)}
+.study-tbl thead th:last-child{border-top-right-radius:var(--r)}
+.study-tbl tbody tr:last-child td:first-child{border-bottom-left-radius:var(--r)}
+.study-tbl tbody tr:last-child td:last-child{border-bottom-right-radius:var(--r)}
+.study-tbl td{padding:8px 11px;border-bottom:1px solid var(--line2);vertical-align:top;border-right:1px solid var(--line2);line-height:1.55}
+.study-tbl tr.srow:hover{background:#fcf7f3}
+.study-tbl .sd{color:var(--ink2);font-weight:600;white-space:nowrap;width:62px}
+.study-tbl .st{color:var(--ink)}
+.study-tbl .sr{color:var(--ink2);font-size:12px;width:115px;word-break:break-word}
+.study-tbl td[rowspan]{vertical-align:middle}
+/* 折叠：月度 / 周 */
+.sgrp{border-bottom:1px solid var(--line)}
+.sgrp:last-child{border-bottom:none}
+.sgrp>summary,.swk>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 13px;font-weight:700;color:var(--brand);background:var(--soft);font-size:13px;user-select:none;text-align:left;box-sizing:border-box;overflow:hidden}
+.sgrp>summary{position:sticky;top:54px;z-index:60;height:44px;border-bottom:1px solid var(--line)}
+.swk>summary{position:sticky;top:98px;z-index:50;height:41px;border-bottom:1px solid var(--line2)}
+.sgrp>summary::-webkit-details-marker,.swk>summary::-webkit-details-marker{display:none}
+.sgrp>summary .chev,.swk>summary .chev2{display:inline-block;width:12px;text-align:center;transition:transform .18s ease;color:var(--ink2);font-size:11px;flex:0 0 auto}
+.sgrp[open]>summary .chev,.swk[open]>summary .chev2{transform:rotate(90deg)}
+.sgrp>summary .smeta{font-weight:500;color:var(--ink2);font-size:12px;margin-left:4px}
+.sgrp>summary .stitle,.swk>summary .stitle2{display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.swk>summary .sw{margin-right:0}
+.swk{border-top:1px solid var(--line2)}
+.swk>summary{padding:7px 13px 7px 30px;background:#fffdfb;font-weight:600;color:var(--ink);font-size:13px}
+.swk>summary .sw{display:inline-block;background:var(--brand);color:#fff;border-radius:6px;padding:1px 9px;font-size:12px;font-weight:700;margin-right:7px}
+.swk>summary .chev2{color:var(--ink3)}
+.study-tbl .sc{text-align:center;width:54px}
+.study-tbl .scb{width:16px;height:16px;accent-color:var(--brand);cursor:pointer}
+.study-tbl .sdt{width:132px}
+.study-tbl .sdate{width:100%;border:1px solid var(--line);border-radius:6px;padding:3px 5px;font-size:12px;color:var(--ink);background:#fff;font-family:inherit;box-sizing:border-box}
+.study-tbl tr.srow.done{background:var(--green-s)}
+.study-tbl tr.srow.done:hover{background:#dff2eb}
+.study-tbl tr.srow.done .scb{accent-color:var(--green)}
+.study-tbl tr.srow.done .sdate{border-color:#c4e6da;background:#f3faf7}
+.study-tbl .se{width:58px;text-align:center;vertical-align:middle}
+.seditbtn{border:none;background:transparent;color:var(--ink3);cursor:pointer;font-size:14px;padding:4px 7px;border-radius:6px;line-height:1;transition:.12s}
+.seditbtn:hover{background:var(--soft);color:var(--brand)}
 </style>
 </head>
 <body>
@@ -482,11 +522,12 @@ plane:'<path d="M17.8 19.2L16 11l3.5-3.5a2.1 2.1 0 00-3-3L13 8 4.8 6.2a.5.5 0 00
 ticket:'<path d="M3 9a3 3 0 010 6v3a2 2 0 002 2h14a2 2 0 002-2v-3a3 3 0 010-6V6a2 2 0 00-2-2H5a2 2 0 00-2 2z"/><path d="M9 4v16"/>',
 scale:'<path d="M12 3v18M5 7h14M7 7l-3 7h6zM17 7l-3 7h6z"/>',
 };
-function ic(n,s){s=s||16;return '<svg width="'+s+'" height="'+s+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+(I[n]||'')+'</svg>'}
+function ic(n,s){s=s||16; if(I[n]){return '<svg width="'+s+'" height="'+s+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+I[n]+'</svg>';} if(n&&n.codePointAt(0)>0x2000){return '<span class="ni" style="font-size:'+s+'px;line-height:1;display:inline-block">'+n+'</span>';} return '<svg width="'+s+'" height="'+s+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></svg>'}
 
 /* ==================== 模块定义 ==================== */
 const MODS=[
  {k:'calendar',n:'日程日历',i:'calendar'},
+ {k:'study',   n:'学习打卡',i:'check'},
  {k:'english', n:'英语学习',i:'globe'},
  {k:'reading', n:'阅读计划',i:'book'},
  {k:'health',  n:'健康与运动',i:'heart'},
@@ -548,6 +589,7 @@ const DEF={
  social:{people:[],contacts:[],giftsOut:[],giftsIn:[]},
  digital:{subs:[],assets:[],goods:[]},
  review:{weekly:[],goals:[],ideas:[]},
+ study:{records:{}},
  memo:{notes:[],vault:[],chores:[]},
  settings:{lastSync:0,seeded:false}
 };
@@ -3631,7 +3673,7 @@ function briefCompose(slot,dt,gen){
  const date=gen.getFullYear()+'-'+pad2(gen.getMonth()+1)+'-'+pad2(gen.getDate());
  const time=pad2(gen.getHours())+':'+pad2(gen.getMinutes());
  const id='b'+date.replace(/-/g,'')+(isEve?'-pm':'-am');
- const idx=dt.idx||[],boards=dt.boards||[],glob=dt.glob||[],zt=dt.zt||null,north=dt.north||null,lhb=dt.lhb||null,futs=dt.futs||null;
+ const idx=dt.idx||[],boards=dt.boards||[],glob=dt.glob||[],zt=dt.zt||null,north=dt.north||null,lhb=dt.lhb||null,futs=dt.futs||null,extraIdx=dt.extraIdx||null;
  const sh=idx.find(x=>x.name==='上证指数')||{},sz=idx.find(x=>x.name==='深证综指')||{};
  const disp=idx.filter(x=>['上证指数','深证成指','创业板指','沪深300'].indexOf(x.name)>=0);
  const up=(sh.up||0)+(sz.up||0),down=(sh.down||0)+(sz.down||0);
@@ -3677,12 +3719,14 @@ function briefCompose(slot,dt,gen){
  if(!isEve){
   if(gl.length){
    const gl1=gl.map(g=>g.name+' '+bpc(g.chg)+(g.price!=null?('（'+num(g.price)+' 点）'):'')).join('，');
+   const rmb=(extraIdx&&extraIdx[0]&&extraIdx[0].chg!=null)?('今晨离岸人民币 USDCNH '+(extraIdx[0].chg>0?'走强':'走弱')+'（'+bpc(extraIdx[0].chg)+'）'):'';
    sections.overseas='① 隔夜外围：'+gl1+'。'+
     '② 科技板块：纳斯达克生物科技 IBB 与半导体 SOXX 板块需结合个股层面财报表现判断（如 mRNA 疫苗三期数据、三星晶圆代工涨价等会传导 A 股医药 / 半导体板块）。'+
-    '③ A 股参考：富时 A50 期指新加坡走势与离岸人民币 USDCNH 汇率波动决定 A 股开盘方向；目前 A50 期指与 10 年期美债收益率盘前接口尚未拉通（东财 secid 未匹配），建议人工或服务端补全。'+
+    '③ A 股参考：'+(rmb?('今晨 '+rmb+'，'):'')+'富时 A50 期指新加坡走势决定 A 股开盘方向（A50 盘前接口尚未拉通，建议结合实时行情与「我的笔记」判断）。'+
     '④ 资金情绪：美股三大指数与港股恒生同步反映隔夜风险偏好，传导路径为：美股科技 → 港股科技 → A 股科创 / 创业板。';
   }else{
-   sections.overseas='① 隔夜外围数据暂未获取，请检查网络或接口。② A50 期指、美债收益率、纳指生物科技板块板块数据盘前接口尚未拉通，建议人工或服务端补全。';
+   const rmb2=(extraIdx&&extraIdx[0]&&extraIdx[0].chg!=null)?('今晨离岸人民币 USDCNH '+bpc(extraIdx[0].chg)+'；'):'';
+   sections.overseas='① 隔夜外围数据暂未获取，请检查网络或接口。② '+rmb2+'A50 期指、美债收益率、纳指生物科技板块盘前接口尚未拉通，建议结合实时行情与「我的笔记」判断。';
   }
  }
  if(isEve){
@@ -3708,10 +3752,11 @@ function briefCompose(slot,dt,gen){
    '③ 关注事件：①海外（美联储官员讲话、欧美经济数据）；②国内顶层（国务院常务会议、政治局会议、央行货币政策报告）；③行业（产业政策、龙头公司公告、行业自律协调）；④个股（业绩预增 / 预减、回购增持、减持、停复牌、收购合并）。';
  }else{
   // ----- 盘前 sections：overseas / policy / industry / announce / ladder / auction -----
+  const rmbChg=(extraIdx&&extraIdx[0]&&extraIdx[0].chg!=null)?extraIdx[0].chg:null;
   sections.policy='① 国内政策面：今日 LPR 报价（如有）需关注 1Y / 5Y 利率变动，方向降 → 利好地产 / 银行；方向升 → 利空成长股估值。'+
    '② 部委动态：发改委 / 商务部 / 工信部 / 央行等部委增量政策（如并购贷款规则修订、行业产业政策、消费 / 投资刺激方案）决定中期方向。'+
    '③ 判断标准：增量政策利好（资金 / 准入 / 减税） vs 中性偏空（监管收紧、提高门槛）。'+
-   '④ 此板块需要人工 / 服务端补全：浏览器端 JSONP 接口无新闻文本，建议人工在「我的笔记」粘贴关键政策摘要。';
+   (rmbChg!=null?('④ 汇率环境：今晨离岸人民币 USDCNH '+bpc(rmbChg)+'，'+(rmbChg>0?'人民币走弱、外资风险偏好承压、利好出口链':'人民币走强、利好人民币资产与北向流入')+'。'):'④ 汇率与政策文本需结合实时行情与「我的笔记」补全：浏览器端 JSONP 接口无新闻文本，建议人工粘贴关键政策摘要。');
   sections.industry='① 隔夜重大产业消息：海外龙头财报 / 产品突破（如 mRNA 疫苗三期数据 → A 股疫苗 / 创新药；三星晶圆代工涨价 → A 股半导体设备 / 材料）。'+
    '② 大宗商品异动：能源 / 有色 / 化工（如莱茵河低水位影响化工供给 → A 股化工涨价预期；铜价异动 → A 股有色板块）。'+
    '③ 国内行业催化：龙头公司业绩预告、产业基金动向、行业自律协调、重大订单 / 合同。'+
@@ -3851,7 +3896,23 @@ function invNews(){
   const bdate=(ST.inv.bdate||'').trim();
   const liveMap=(D.invest.liveBriefs=D.invest.liveBriefs||{});
   let all=(BRIEFS||[]).slice();
-  Object.keys(liveMap).forEach(k=>{const i=all.findIndex(x=>x.id===k);if(i>=0)all[i]=liveMap[k];else all.push(liveMap[k]);});
+  // 合并策略：briefs.json 中「服务端 AI 深度简报」（盘前 9:00 / 盘后 21:00 自动化定时生成，含龙虎榜/消息面/夜盘等深度解读）是叙事与板块解读的权威来源；
+  // 浏览器端实时简报只作「存档缺失时的兜底 / 量化数据增量补充」，不再覆盖存档的板块解读。这样盘前/盘后深度内容都能在网页展示，并消除实时版大量"待补"空板块。
+  const archiveIds=new Set((BRIEFS||[]).map(x=>x.id));            // 哪些 id 是服务端 AI 深度存档
+  Object.keys(liveMap).forEach(k=>{ if(!all.find(x=>x.id===k)) all.push(liveMap[k]); }); // 仅追加存档中没有的实时条目
+  all=all.map(b=>{
+    const lv=liveMap[b.id];
+    if(!lv) return Object.assign({},b,{_src:'ai'});                // 仅存档：标记 AI 深度来源
+    if(!archiveIds.has(b.id)) return b;                           // 仅实时（无存档）：保留原样 → 显示"页面生成"
+    const out=Object.assign({},b);                                // 存档+实时同 id：存档解读优先，实时仅补缺
+    out.sections=Object.assign({},lv.sections||{},b.sections||{});
+    ['summary','detail'].forEach(f=>{ if(!out[f]&&lv[f]) out[f]=lv[f]; });
+    if(!(b.points&&b.points.length)&&lv.points) out.points=lv.points;
+    if(!(b.track&&b.track.length)&&lv.track) out.track=lv.track;
+    if(!(b.avoid&&b.avoid.length)&&lv.avoid) out.avoid=lv.avoid;
+    out._src='ai';
+    return out;
+  });
   let list=all.sort((a,b)=>String(b.ts||b.date).localeCompare(String(a.ts||a.date)));
   const hasF=bslot||bdate||bq;
   if(hasF){
@@ -3961,7 +4022,7 @@ function briefCard(b,m){
   return '<div style="border:1px solid var(--line);border-radius:12px;padding:11px 13px;background:#fff">'+
    '<div style="display:flex;align-items:center;gap:7px;margin-bottom:7px;flex-wrap:wrap">'+
     '<span class="tag '+slotCls+'">'+slot+'</span>'+
-    (b.live?'<span class="tag g" title="浏览器端定时（9:00/21:00）或手动立即生成，数据抓取自公开行情接口">页面生成 · '+(String(b.ts||'').slice(11,16)||'')+'</span>':'')+
+    (b._src==='ai'?'<span class="tag b" title="AI 深度简报：服务端定时（9:00 盘前 / 21:00 盘后）生成并写入 briefs.json，含龙虎榜、消息面、夜盘等深度解读">AI 深度 · '+(String(b.ts||'').slice(11,16)||'')+'</span>':(b.live?'<span class="tag g" title="浏览器端定时（9:00/21:00）或手动立即生成，数据抓取自公开行情接口">页面生成 · '+(String(b.ts||'').slice(11,16)||'')+'</span>':''))+
     '<b style="font-size:13px">'+esc(b.date||'')+'</b>'+
     '<span style="font-size:11px;color:var(--ink3);flex:1">'+esc(b.market||'A股')+'</span>'+
     '<button class="btn sm gh" onmousedown="event.preventDefault()" onclick="briefHl(\''+b.id+'\')" title="选中正文文字后点此高亮" style="'+(m.hl&&m.hl.length?'color:var(--brand)':'opacity:.5')+'">'+ic('star',13)+'</button>'+
@@ -4322,6 +4383,237 @@ const PLAN={
  };
 });
 function socDone(id){const c=(D.social.contacts||[]).find(x=>x.id===id);if(c){c.done=true;c.last=TODAY;save();toast('已标记跟进完成')}}
+
+/* ==================== 📚 学习打卡（整合《90 天转行作战清单》+《W1–W4 每日打卡表》） ==================== */
+/* 层级：月度 → 周（W1…W12）→ 日（W1–W4 有每日任务 + 完成标准；W5–W12 为每周任务）。
+   每项任务带勾选框（标记完成并自动填当天日期，可改）与打卡日期输入；完成态灰色显示、不隐藏、不加删除线。 */
+const STUDY=[
+ {m:'第 1 月 · 能力筑基期（D1–30）', ws:[
+   {w:'W1', g:'碳核算标准地基：搞懂"算什么、怎么算、按什么标准算"', days:[
+     {d:'D1', t:'ISO 14064-1:2018 通读', r:'能不看资料说出 14064-1 解决"什么"；术语表 ≥10 条',
+       tk:['阅读 ISO 14064-1 正文（重点：第 4–6 章）','记录核心术语：组织边界 / 运营边界 / 基准年 / 减排量','区分"温室气体减排"与"温室气体盘查"']},
+     {d:'D2', t:'GHG Protocol Corporate Standard 精读', r:'能画出 Scope 1/2 边界示意；说明选"运营控制法"的理由',
+       tk:['读 Corporate Standard 第 4–6 章','搞清 Scope 1（直接排放）与 Scope 2（外购电热力）','理解三种合并方法：股权 / 财务控制 / 运营控制']},
+     {d:'D3', t:'GB/T 32150 通则 + 行业指南', r:'写出"国标 vs GHG Protocol"对比 3 条；明确活动数据 / 排放因子 / 核算公式口径',
+       tk:['读 GB/T 32150《组织温室气体排放核算通则》','找 1 份对应行业指南（如 GB/T 32151 系列）浏览结构','对比国标与 GHG Protocol 的异同（笔记）']},
+     {d:'D4', t:'排放因子体系', r:'能说清电力排放因子"全国 / 区域电网"区别；列出 3 个可信因子来源',
+       tk:['了解生态环境部因子库 / 英国 DEFRA / IPCC 缺省值','搞清"缺省因子 vs 实测因子"适用场景','收藏 2 个常用因子查询入口（加入 ima）']},
+     {d:'D5', t:'Scope 3 十五类概览', r:'能背出 Scope 3 的"上游 / 下游"大致分类；圈定本企业模拟重点类别',
+       tk:['通读 Scope 3 Standard 十五类名称与典型活动','标记"一般企业最相关的 5 类"（采购商品 / 运输 / 差旅 / 废弃物 / 上下游）','暂不深算，建立地图即可']},
+     {d:'D6', t:'知识梳理 + 思维导图', r:'一张能向他人讲解的脑图；覆盖标准 / 边界 / 范围 / 因子四要素',
+       tk:['用 Xmind / 幕布 / 手写绘制"碳核算标准框架"脑图','串联：14064-1 → GHG Protocol → GB/T 32150 → 因子体系','把脑图存入 ima 知识库（截图或笔记）']},
+     {d:'D7', t:'周复盘 + 自测', star:true, r:'自测全对；问题清单 ≤5 条且具体',
+       tk:['自测：不看资料默写 Scope 1/2/3 区别','整理本周未懂的问题清单（下周带着问）','规划 W2 模拟企业对象']},
+   ]},
+   {w:'W2', g:'动手做：以一家模拟制造企业为对象跑通一次完整碳盘查', days:[
+     {d:'D8', t:'设定边界 + 排放源清单', r:'边界说明 + 排放源清单表各 1 份；基准年选定',
+       tk:['选定模拟公司（如"某金属加工制造企业"）','用"运营控制法"定组织边界','列出排放源清单（燃料 / 电力 / 蒸汽 / 运输 / 工艺…）']},
+     {d:'D9', t:'活动数据收集表设计', r:'一张结构化收集表 + 一套自洽模拟数据',
+       tk:['设计 Excel 活动数据收集表（分 Scope 1/2/3 页签）','标注每个数据需要的"来源 / 单位 / 年份"','用合理假设填一套模拟数据（不必真实）']},
+     {d:'D10', t:'Scope 1 计算', r:'Scope 1 结果表（tCO₂e）含计算式与因子出处',
+       tk:['化石燃料燃烧排放计算（排放因子法）','工艺排放 / 逸散排放（如有）估算','套用公式：活动数据 × 排放因子 × GWP']},
+     {d:'D11', t:'Scope 2 计算', r:'Scope 2 结果表；说明所选电网因子来源',
+       tk:['外购电力：电量 × 区域电网因子','外购热力（蒸汽 / 热水）计算','区分"位置法"与"市场法"（了解即可）']},
+     {d:'D12', t:'Scope 3 重点类别估算', r:'Scope 3 估算表；明确"估算"而非"精算"',
+       tk:['选 3–5 类重点（采购商品 / 运输 / 差旅 / 废弃物）','用简化法（如支出法 / 质量法）估算','标注估算不确定性']},
+     {d:'D13', t:'数据质控 + 不确定性', r:'总排放清单（按范围拆分）+ 质控说明',
+       tk:['写"数据管理计划"要点（收集 / 核验 / 存档）','评估主要不确定性来源','汇总 Scope 1+2+3 总排放清单']},
+     {d:'D14', t:'周复盘 + 作品初稿', star:true, r:'报告草稿含边界 / 清单 / 计算 / 结果；可进入 W3 改写',
+       tk:['把 D8–D13 汇总成"碳盘查报告草稿 v0.1"','检查数据可追溯性（每数有出处）','列出待补章节（W3 披露语言）']},
+   ]},
+   {w:'W3', g:'披露框架：把"算出来的数"变成"市场能读的报告"', days:[
+     {d:'D15', t:'GRI Standards 通读', r:'能说清 GRI 305-1/305-2/305-3 对应什么；笔记 ≥5 条',
+       tk:['读 GRI 通用准则（GRI 1 / 2 / 3）','重点看环境议题 305（排放）','记录"实质性议题"识别逻辑']},
+     {d:'D16', t:'ISSB S1 / S2', r:'写出 ISSB S2 与 GHG Protocol 的衔接点',
+       tk:['读 IFRS S2 气候相关披露核心要求','理解"治理 / 战略 / 风险管理 / 指标目标"四要素','对比 ISSB 与 TCFD 的承接关系']},
+     {d:'D17', t:'TCFD 四支柱', r:'能用一句话讲清 TCFD 四支柱；与 ISSB 对比表 1 份',
+       tk:['读 TCFD 最终建议（治理 / 战略 / 风险 / 指标）','理解"情景分析"概念（了解即可）','对比 TCFD 与 ISSB 四要素异同']},
+     {d:'D18', t:'上交所《可持续发展报告指引》', r:'列出上交所碳相关披露要点 ≥5 条',
+       tk:['精读上交所指引（应对气候变化章节）','标记"强制披露 vs 鼓励披露"要点','提炼企业碳信息披露的合规要求']},
+     {d:'D19', t:'深交所 / 北交所指引对比', r:'三所对比表 1 份；点出中小企业咨询切入点',
+       tk:['对比三家交易所指引差异（适用主体 / 节奏）','归纳"共性披露框架"','思考：非上市中小企业如何应对（咨询机会）']},
+     {d:'D20', t:'优秀报告拆解', r:'一份报告拆解笔记（结构 + 亮点 + 可抄框架）',
+       tk:['读永艺家具 603600 / 成都先导 688222 2024 报告','提取其"治理 / 战略 / 风险 / 指标"结构','记录可借鉴的披露话术与图表']},
+     {d:'D21', t:'周复盘 + 框架对比笔记', star:true, r:'对比总表定稿；作品主框架已定',
+       tk:['完成"GRI vs ISSB vs TCFD vs 交易所"对比总表','确定自己作品采用的主框架（建议：交易所 + GRI）','规划 W4 改写 W2 草稿']},
+   ]},
+   {w:'W4', g:'作品收尾 + CBAM 切入 + 政策梳理', days:[
+     {d:'D22', t:'EU CBAM 机制与填报', r:'能讲清 CBAM 是什么、谁要报、报什么',
+       tk:['读 EU CBAM 立法与过渡期指南（官方）','搞清覆盖行业、嵌入排放、默认值填报','理解 2026 正式征收节点与对企业影响']},
+     {d:'D23', t:'CBAM 中英术语表 + 样张', r:'术语表 + 模拟样张各 1 份，可对外展示',
+       tk:['建立 CBAM 中英术语对照（≥30 条）','做 1 份模拟填报样张（嵌入式排放计算）','这是你的"差异化作品"，存入作品集']},
+     {d:'D24', t:'国内双碳政策主线', r:'政策时间线 1 份；能说清政策如何转化为企业需求',
+       tk:['梳理：双碳目标 → 碳市场扩围 → 碳排放权交易暂行条例','读生态环境部答问 / 商务部 CBAM 解读','写"政策—企业动作"映射笔记']},
+     {d:'D25', t:'按框架改写作品披露章节', r:'报告 v0.5 含标准披露章节，结构完整',
+       tk:['用 W3 选定框架改写 W2 草稿','补"治理 / 战略 / 风险 / 指标"四节（按 TCFD / ISSB）','统一术语与披露话术']},
+     {d:'D26', t:'作品定稿 + 一页摘要', r:'作品定稿 PDF + 一页摘要，可直接进简历 / 作品集',
+       tk:['美化排版、脱敏处理（不泄露真实客户）','制作一页作品摘要（方法 / 范围 / 结果 / 亮点）','导出 PDF 备用']},
+     {d:'D27', t:'简历更新 + 作品集包装', r:'简历 v1 + 作品集文件夹；自我介绍能脱口而出',
+       tk:['把林业履历"翻译"为可迁移能力表述','在简历中加入作品集链接 / 摘要','准备 1 段 30 秒自我介绍（突出碳核算 + CBAM）']},
+     {d:'D28', t:'阶段验收 + 下一阶段准备', star:true, r:'三标准全过 → 进入阶段二；否则补 D 对应任务',
+       tk:['对照阶段一验收三标准自检（见 90 天清单）','列出阶段二待办（CBAM 深化 / ESG 证书 / 内容账号）','归档本周产出到 ima 知识库']},
+   ]},
+ ]},
+ {m:'第 2 月 · 差异化 + 个人品牌（D31–60）', ws:[
+   {w:'W5', g:'CBAM 双语深度——打造你的"稀缺标签"', days:[
+     {d:'', r:'能向出口企业讲清 CBAM 填报逻辑：覆盖范围、嵌入排放、默认值与原产国因子取值', tk:['翻译并消化 EU CBAM 官方指南关键章节（嵌入申报、默认值、原产国因子）']},
+     {d:'', r:'产出 1 份中英双语清单，结构可用、可对外展示（关键里程碑 D35）', star:true, tk:['产出《出口企业 CBAM 填报实务清单》（中英双语，可作为作品 / 引流文）']},
+     {d:'', r:'形成 1–2 个行业 CBAM 影响案例笔记，能说出对出口企业的具体成本 / 合规影响', tk:['研究 1–2 个行业案例（钢铁、铝、化肥、水泥、电力、氢）']},
+   ]},
+   {w:'W6', g:'行业纵深 + 考一张 ESG 证书', days:[
+     {d:'', r:'明确主攻行业并写出"行业—CBAM—企业需求"关联，避免泛泛', tk:['选定目标行业纵深（建议：制造业 / 出口型企业，与 CBAM 协同）']},
+     {d:'', r:'完成报名并取得在考 / 结证凭证（关键里程碑 D42）', star:true, tk:['报名并完成 1 门 ESG 培训 / 证书（CESGA、交易所 ESG 专题、或上海环交所相关培训）']},
+     {d:'', r:'建立碳足迹 / LCA 与碳交易知识卡片，能讲清与盘查的衔接', tk:['补足加分项：碳足迹 / LCA 基础、碳交易基础（你已有注登 / 公示实操，差异化为"懂落地"）']},
+   ]},
+   {w:'W7', g:'简历重构 + 作品集 + 面试素材库', days:[
+     {d:'', r:'输出能力迁移清单，弱化"林业"、强化"碳核算 / 合规 / 项目管理"', tk:['把林业碳汇履历"翻译"为可迁移能力：碳核算 / 项目管理 / 政策合规 / 招投标 / 双语']},
+     {d:'', r:'简历定稿，含可迁移能力 + 作品链接（关键里程碑 D49 组成部分）', tk:['重做简历（STAR 结构，量化成果，突出碳盘查作品与 CBAM）']},
+     {d:'', r:'作品集文件夹成型，3 类作品齐备、可分享（关键里程碑 D49）', star:true, tk:['搭建作品集：碳盘查报告（脱敏）+ CBAM 清单 + 政策速览']},
+     {d:'', r:'素材库含 30 秒自我介绍 + 3 个项目故事 + 10 道高频题应答', tk:['准备面试素材库：自我介绍、项目故事、常见 ESG / 碳题问答']},
+   ]},
+   {w:'W8', g:'个人品牌启动——让机会来找你', days:[
+     {d:'', r:'账号开通并定调，简介突出差异化人设', tk:['开通 / 打理一个内容账号（小红书 / 知乎 / 公众号），定位"碳汇交付转 ESG 的实操者"']},
+     {d:'', r:'发布首批 3–5 篇，阅读 / 互动有迹可循（关键里程碑 D56）', star:true, tk:['发布 3–5 篇干货（碳盘查是什么、CBAM 对出口企业的影响、双碳政策周报）']},
+     {d:'', r:'内推名单 ≥5 人，标注可对接岗位', tk:['梳理人脉：前同事 / 校友 / 行业群，列出可内推名单']},
+   ]},
+ ]},
+ {m:'第 3 月 · 求职冲刺 + 薪酬谈判（D61–90）', ws:[
+   {w:'W9', g:'内推优先 + 精准投递', days:[
+     {d:'', r:'锁定 5+ 内推渠道，明确目标岗位画像', tk:['优先走内推（转化率远高于海投），目标岗位：ESG 专员 / 可持续发展专员 / 碳管理顾问 / 碳核算分析师']},
+     {d:'', r:'建立投递追踪表，进入面试流程 ≥2 家（关键里程碑 D70）', star:true, tk:['每日 / 隔日投递，记录表格（公司、岗位、来源、进度）']},
+     {d:'', r:'每份 JD 留匹配标注与简历改点', tk:['对每份 JD 做 10 分钟"能力—履历"匹配标注，针对性改简历']},
+   ]},
+   {w:'W10–11', g:'面试实战 + 迭代', days:[
+     {d:'', r:'完成 2 轮模拟面试并录像，输出复盘要点', tk:['找 1–2 位朋友 / 同行做 2 轮模拟面试，录像复盘']},
+     {d:'', r:'高频题逐题备稿，能脱稿讲清方法论', tk:['高频题准备：组织碳盘查流程、Scope 3 难点、CBAM 实操、双碳政策理解、Excel / 数据能力']},
+     {d:'', r:'每场面试有复盘记录，话术持续迭代（关键里程碑 D84）', star:true, tk:['每场面试后写复盘（答得好的、卡的、要补的），迭代话术']},
+     {d:'', r:'并行推进 ≥2 条机会线，避免单点押注', tk:['拿到面试邀约即同步推进多线，不押单一机会']},
+   ]},
+   {w:'W12', g:'拿 offer + 薪酬谈判', days:[
+     {d:'', r:'形成 offer 对比表，量化各维度', tk:['对比 offer：薪资、成长、行业、地点（深圳通勤）、团队']},
+     {d:'', r:'完成薪酬谈判，确认达标入职 ≥11k / 月（关键里程碑 D90）', star:true, tk:['谈判底线 = 月基 ≥11,000（低于此不动）；用"碳盘查作品 + CBAM 双语 + 4 年交付经验"抬价']},
+     {d:'', r:'按合同提前通知、合规交接，保护行业口碑', tk:['离职交接合规（见红线），平稳过渡']},
+   ]},
+ ]},
+];
+(function(){
+ STUDY.forEach((mo,mi)=>{
+   mo.ws.forEach((wk,wi)=>{
+     wk._items=[];
+     if(wk.days){
+       wk.days.forEach((dy,di)=>dy.tk.forEach((task,ti)=>wk._items.push({key:'s'+mi+'-'+wi+'-'+di+'-'+ti,d:dy.d,task:task,req:dy.r,star:!!dy.star})));
+     }else{
+       (wk.tk||[]).forEach((task,ti)=>wk._items.push({key:'s'+mi+'-'+wi+'-'+ti,d:'',task:task,req:wk.g}));
+     }
+   });
+ });
+})();
+function studyRec(){ D.study=D.study||{records:{}}; return D.study.records; }
+function studyCheck(cb,key){
+  const R=studyRec(),r=R[key]||(R[key]={done:false,date:''});
+  r.done=!!cb.checked;
+  if(r.done&&!r.date)r.date=TODAY;
+  if(!r.done)r.date='';
+  save(true);
+  const row=cb.closest?cb.closest('.srow'):null; if(row)row.classList.toggle('done',r.done);
+  const di=row?row.querySelector('.sdate'):null; if(di)di.value=r.date;
+  studyProgress();
+}
+function studySetDate(key,v){
+  const R=studyRec(),r=R[key]||(R[key]={done:false,date:''});
+  r.date=v||''; save(true);
+}
+function studyProgress(){
+  const bar=document.getElementById('sbar'),txt=document.getElementById('stxt'); if(!bar||!txt)return;
+  const R=studyRec(); let done=0,total=0;
+  STUDY.forEach(mo=>{
+    mo.ws.forEach(wk=>{
+      wk._items.forEach(it=>{ total++; if(R[it.key]&&R[it.key].done)done++; });
+    });
+  });
+  const pct=total?Math.round(done/total*100):0;
+  bar.style.width=pct+'%'; txt.innerHTML='已完成 <b style="color:var(--brand)">'+done+'</b> / '+total+' 项（'+pct+'%）';
+}
+function studyReset(){
+  confirmM('重置学习打卡','将清空全部勾选与打卡日期，确定吗？',()=>{ D.study={records:{}}; save(); render(); toast('已重置'); });
+}
+function seTask(it){const o=D.study.edits&&D.study.edits[it.key];return o&&o.task!=null?o.task:it.task;}
+function seReq(it){const o=D.study.edits&&D.study.edits[it.key];return o&&o.req!=null?o.req:it.req;}
+function studyEdit(key){
+  let found=null;
+  STUDY.forEach(mo=>mo.ws.forEach(wk=>wk._items.forEach(it=>{if(it.key===key)found=it;})));
+  if(!found)return;
+  const o=(D.study.edits&&D.study.edits[key])||{};
+  const task=o.task!=null?o.task:found.task;
+  const req=o.req!=null?o.req:found.req;
+  formM('编辑学习任务',[
+    {id:'_et',l:'学习任务',v:task,t:'ta',h:52},
+    {id:'_er',l:'要求（完成标准）',v:req,t:'ta',h:84}
+  ],()=>{
+    const t=val('_et'),r=val('_er');
+    if(!t.trim()){toast('学习任务不能为空');return false;}
+    D.study.edits=D.study.edits||{};
+    D.study.edits[key]={task:t,req:r};
+    save(); render(); toast('已更新');
+  },540);
+}
+function R_study(){
+  const R=studyRec();
+  let done=0,total=0;
+  STUDY.forEach(mo=>{
+    mo.ws.forEach(wk=>{
+      wk._items.forEach(it=>{ total++; if(R[it.key]&&R[it.key].done)done++; });
+    });
+  });
+  const pct=total?Math.round(done/total*100):0;
+  let h='<div class="card" style="margin-bottom:14px">'+chH('check','学习打卡 · 90 天转行作战','ESG / 碳管理专员 · 深圳',
+    '<button class="btn sm" onclick="studyReset()">重置进度</button>')+
+    '<div style="display:flex;align-items:center;gap:12px">'+
+    '<div style="flex:1;height:10px;background:var(--line);border-radius:6px;overflow:hidden"><i id="sbar" style="display:block;height:100%;width:'+pct+'%;background:var(--brand);transition:width .3s"></i></div>'+
+    '<span id="stxt" style="font-size:13px;color:var(--ink2);white-space:nowrap">已完成 <b style="color:var(--brand)">'+done+'</b> / '+total+' 项（'+pct+'%）</span></div></div>';
+  h+='<div class="card" style="padding:0">';
+  STUDY.forEach(mo=>{
+    const mc=mo.ws.reduce((a,wk)=>a+(wk._items?wk._items.length:0),0);
+    h+='<details class="sgrp" open><summary><span class="stitle">'+esc(mo.m)+'<span class="smeta">（'+mo.ws.length+' 周 · '+mc+' 项）</span></span><span class="chev">▸</span></summary>';
+    mo.ws.forEach(wk=>{
+      h+='<details class="swk" open><summary><span class="stitle2"><span class="sw">'+esc(wk.w)+'</span>'+esc(wk.g)+'</span><span class="chev2">▸</span></summary>';
+      h+='<table class="study-tbl"><thead><tr>'+
+        '<th style="width:62px">日</th><th>学习任务</th><th style="width:115px">要求</th><th style="width:54px">完成</th><th style="width:132px">打卡日期</th><th style="width:58px">编辑</th></tr></thead><tbody>';
+      const its=wk._items,n=its.length;
+      const eReq=its.map(it=>seReq(it));
+      const dRun=new Array(n),rRun=new Array(n);
+      let i=0;
+      while(i<n){ let j=i; const d0=its[i].d;
+        while(j+1<n && its[j+1].d===d0 && d0) j++;
+        for(let k=i;k<=j;k++) dRun[k]={rs:j-i+1,start:k===i};
+        i=j+1; }
+      i=0;
+      while(i<n){ let j=i; const r0=eReq[i];
+        while(j+1<n && eReq[j+1]===r0) j++;
+        for(let k=i;k<=j;k++) rRun[k]={rs:j-i+1,start:k===i};
+        i=j+1; }
+      its.forEach((it,ti)=>{
+        const rec=R[it.key]||{},dc=rec.done?' done':'';
+        const dR=dRun[ti],rR=rRun[ti];
+        const sd=dR.start?`<td class="sd" rowspan="${dR.rs}">${it.d?esc(it.d):'<span style="color:var(--ink3)">·</span>'}</td>`:'';
+        const sr=rR.start?`<td class="sr" rowspan="${rR.rs}">${esc(eReq[ti]||'')}</td>`:'';
+        h+=`<tr class="srow${dc}" data-skey="${it.key}">`+
+          sd+
+          `<td class="st">${it.star?'✨ ':''}${esc(seTask(it))}</td>`+
+          sr+
+          `<td class="sc"><input type="checkbox" class="scb" ${rec.done?'checked':''} onclick="studyCheck(this,'${it.key}')"></td>`+
+          `<td class="sdt"><input type="date" class="sdate" value="${rec.date||''}" onchange="studySetDate('${it.key}',this.value)"></td>`+
+          `<td class="se"><button class="seditbtn" title="编辑本行" onclick="studyEdit('${it.key}')">✎</button></td>`+
+        '</tr>';
+      });
+      h+='</tbody></table>';
+      h+='</details>';
+    });
+    h+='</details>';
+  });
+  h+='</div>';
+  return h;
+}
 
 /* ==================== 📚 英语学习（覆盖上方占位） ==================== */
 const EB=[1,2,4,7,15,30];
