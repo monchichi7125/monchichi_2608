@@ -371,7 +371,7 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
 .g2.keep2,.g3.keep3,.g4.keep4{}
 @media(max-width:900px){.g4.keep4{grid-template-columns:repeat(2,1fr)}.g2.keep2{grid-template-columns:repeat(2,1fr)}}
 /* ==================== 学习打卡 ==================== */
-.study-tbl{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+.study-tbl{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;font-size:13px}
 .study-tbl th{position:sticky;top:139px;z-index:40;background:var(--soft);color:var(--brand);font-weight:600;text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap;box-shadow:0 2px 7px -3px rgba(50,35,20,.22)}
 .study-tbl thead th:first-child{border-top-left-radius:var(--r)}
 .study-tbl thead th:last-child{border-top-right-radius:var(--r)}
@@ -4707,7 +4707,7 @@ function R_study(){
     mo.ws.forEach(wk=>{
       h+='<details class="swk" open><summary><span class="stitle2"><span class="sw">'+esc(wk.w)+'</span>'+esc(wk.g)+'</span><span class="chev2">▸</span></summary>';
       h+='<table class="study-tbl"><thead><tr>'+
-        '<th style="width:92px">日 / 主题</th><th>学习任务</th><th style="width:115px">要求</th><th style="width:54px">完成</th><th style="width:132px">打卡日期</th><th style="width:58px">编辑</th></tr></thead><tbody>';
+        '<th style="width:92px">日 / 主题</th><th style="width:34%">学习任务</th><th style="width:43%">要求</th><th style="width:54px">完成</th><th style="width:132px">打卡日期</th><th style="width:58px">编辑</th></tr></thead><tbody>';
       const its=wk._items,n=its.length;
       const eReq=its.map(it=>seReq(it));
       const rRun=new Array(n);
