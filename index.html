@@ -1678,25 +1678,64 @@ function assetEdit(id){
  });
 }
 /* --- 存钱计划 --- */
+function svInit(){
+ // 旧数据迁移：历史用单一 cur 累计 → 改为 base（起始已存）+ logs（逐笔明细），累计额由明细派生
+ let ch=false;
+ (D.finance.savings||[]).forEach(s=>{
+  if(!Array.isArray(s.logs)){s.logs=[];s.base=+(s.cur||0)||0;ch=true;}
+  if(s.base==null){s.base=0;ch=true;}
+ });
+ if(ch)save();
+}
+function svLogs(s){return Array.isArray(s&&s.logs)?s.logs:[]}
+function svCur(s){return (Number(s&&s.base)||0)+svLogs(s).reduce((a,l)=>a+(Number(l&&l.amt)||0),0)}
+/* 剩余期数：按「月」而非按天计算（含当月），例如今天 2026-09、截止 2026-12-31 → 4 期 */
+function svMonthsLeft(end){
+ if(!end||String(end).length<7)return null;
+ const ey=+String(end).slice(0,4),em=+String(end).slice(5,7);
+ const n=new Date();
+ return (ey-n.getFullYear())*12+(em-(n.getMonth()+1))+1;
+}
+function svMonthSum(s,ym){return svLogs(s).filter(l=>l.ym===ym).reduce((a,l)=>a+(Number(l.amt)||0),0)}
+function svToggle(id){ST.sv=ST.sv||{};ST.sv[id]=!ST.sv[id];render();}
 function finSaving(){
+ svInit();
  const S=D.finance.savings||[];
+ const cym=curYM();
  return '<div class="card"><div class="ch"><h3>'+ic('target',15)+'存钱计划</h3><div class="sp"></div>'+
  '<button class="btn sm pri" onclick="saveEdit()">'+ic('plus',14)+'新计划</button></div>'+
  (S.length?'<div style="display:flex;flex-direction:column;gap:13px">'+S.map(s=>{
-  const p=s.goal>0?Math.min(100,s.cur/s.goal*100):0,gap=Math.max(0,s.goal-s.cur);
-  const days=s.end?dayDiff(s.end,TODAY):null;
+  const cur=svCur(s);
+  const p=s.goal>0?Math.min(100,cur/s.goal*100):0,gap=Math.max(0,s.goal-cur);
+  const mL=svMonthsLeft(s.end),mm=svMonthSum(s,cym);
+  const logs=svLogs(s).slice().sort((a,b)=>String(b.ym||'').localeCompare(String(a.ym||'')));
+  const open=!!(ST.sv||{})[s.id];
   return '<div style="border:1px solid var(--line);border-radius:13px;padding:12px 13px">'+
   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">'+
   '<span class="tag '+(s.type==='年度'?'p':'b')+'">'+esc(s.type)+'</span>'+
   '<b style="flex:1;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(s.name)+'</b>'+
   '<button class="btn sm gh" onclick="saveAdd(\''+s.id+'\')">'+ic('plus',13)+'存入</button>'+
+  '<button class="btn sm gh" onclick="svToggle(\''+s.id+'\')" title="查看 / 隐藏存入记录"'+(open?' style="color:var(--brand)"':'')+'>'+ic(open?'chevU':'chevD',13)+'记录'+(logs.length?'('+logs.length+')':'')+'</button>'+
   '<button class="btn sm gh" onclick="saveEdit(\''+s.id+'\')">'+ic('edit',13)+'</button>'+
   '<button class="btn sm gh dg" onclick="delItem(D.finance.savings,\''+s.id+'\',\'计划\')">'+ic('trash',13)+'</button></div>'+
   '<div class="bar gn" style="margin-bottom:6px"><i style="width:'+p.toFixed(1)+'%"></i></div>'+
   '<div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink3);flex-wrap:wrap;gap:6px">'+
-  '<span>已存 <b class="num" style="color:var(--green)">'+money(s.cur)+'</b> / '+money(s.goal)+' （'+p.toFixed(1)+'%）</span>'+
-  '<span>还差 <b class="num" style="color:var(--brand)">'+money(gap)+'</b>'+(days!=null?(days>=0?' · 剩 '+days+' 天':' · 已到期'):'')+'</span></div>'+
-  (days!=null&&days>0&&gap>0?'<div style="font-size:11px;color:var(--ink3);margin-top:4px">按剩余天数摊，每天需存 <b>'+money(gap/days)+'</b></div>':'')+
+  '<span>已存 <b class="num" style="color:var(--green)">'+money(cur)+'</b> / '+money(s.goal)+' （'+p.toFixed(1)+'%）</span>'+
+  '<span>还差 <b class="num" style="color:var(--brand)">'+money(gap)+'</b>'+(mL!=null?(mL>0?' · 剩 '+mL+' 个月':' · 已到期'):'')+'</span></div>'+
+  (mL==null?''
+   :(mL>0&&gap>0
+     ?'<div style="font-size:11px;color:var(--ink3);margin-top:4px">按月摊：<b>'+cym+'</b> 起至 <b>'+esc(String(s.end).slice(0,7))+'</b> 共 <b>'+mL+'</b> 期，每月需存 <b>'+money(gap/mL)+'</b>'+(mm?' · 本月已存 '+money(mm):' · 本月暂无存入')+'</div>'
+     :'<div style="font-size:11px;color:var(--ink3);margin-top:4px">'+(mL>0?('按月摊：共 <b>'+mL+'</b> 期，月均 <b>'+money(cur/mL)+'</b> · 已达标'):'截止日期已过，建议更新截止日或目标')+'</div>'))+
+  (open?(logs.length
+    ?'<div style="margin-top:8px;border-top:1px dashed var(--line2);padding-top:7px;display:flex;flex-direction:column;gap:5px">'+
+     logs.map(l=>'<div style="display:flex;align-items:center;gap:8px;font-size:12px">'+
+      '<span class="tag b" style="min-width:60px;text-align:center">'+esc(l.ym||'')+'</span>'+
+      '<b class="num" style="color:'+((l.amt||0)>=0?'var(--green)':'var(--red)')+'">'+((l.amt||0)>=0?'+':'')+money(l.amt)+'</b>'+
+      '<span style="flex:1;color:var(--ink3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(l.note||'')+'</span>'+
+      '<button class="btn sm gh" onclick="svLogEdit(\''+s.id+'\',\''+l.id+'\')" title="编辑这条记录">'+ic('edit',12)+'</button>'+
+      '<button class="btn sm gh dg" onclick="svLogDel(\''+s.id+'\',\''+l.id+'\')" title="删除这条记录">'+ic('trash',12)+'</button></div>').join('')+'</div>'
+    :'<div style="margin-top:8px;border-top:1px dashed var(--line2);padding-top:7px;font-size:12px;color:var(--ink3)">还没有存入记录，点「存入」记第一笔（会同步记录年月）</div>')
+   :'')+
   '</div>'}).join('')+'</div>'
  :'<div class="empty">'+ic('target',28)+'定一个存钱小目标吧</div>')+'</div>';
 }
@@ -1706,19 +1745,52 @@ function saveEdit(id){
   {id:'s_n',l:'计划名称',v:s?s.name:'',p:'例如：2026 年度储蓄',req:1},
   {id:'s_t',l:'周期',t:'sel',o:['年度','月度'],v:s?s.type:'年度'},
   {id:'s_g',l:'目标金额',t:'number',v:s?s.goal:''},
-  {id:'s_c',l:'已存金额',t:'number',v:s?s.cur:0},
-  {id:'s_e',l:'截止日期',t:'date',v:s?s.end:(TODAY.slice(0,4)+'-12-31')},
+  {id:'s_c',l:'起始已存金额',t:'number',v:s?(s.base||0):0,tip:'计划建立时已有的金额；之后的每笔存入请点「存入」，会单独记录年月'},
+  {id:'s_e',l:'截止日期',t:'date',v:s?s.end:(TODAY.slice(0,4)+'-12-31'),tip:'进度条下方按月数均摊计算所需月供'},
  ],()=>{
   const n=val('s_n');if(!n){toast('请填写名称');return false}
-  const o={id:s?s.id:uid(),name:n,type:val('s_t'),goal:nval('s_g'),cur:nval('s_c'),end:val('s_e')};
-  if(s)Object.assign(s,o);else D.finance.savings.push(o);save();toast('已保存');
+  const o={id:s?s.id:uid(),name:n,type:val('s_t'),goal:nval('s_g'),base:nval('s_c'),end:val('s_e'),logs:s?svLogs(s):[]};
+  const tgt=s||o;
+  if(s)Object.assign(s,o);else D.finance.savings.push(o);
+  tgt.cur=svCur(tgt);   // 保留 cur 字段做兼容，真正权威值是 base + logs 明细
+  save();toast('已保存');
  });
 }
 function saveAdd(id){
  const s=D.finance.savings.find(x=>x.id===id);if(!s)return;
- formM('存入 · '+s.name,[{id:'sa',l:'本次存入金额',t:'number',v:'',p:'负数表示取出'}],()=>{
-  s.cur=(+s.cur||0)+nval('sa');save();toast('已记录，当前累计 '+money(s.cur));
+ if(!Array.isArray(s.logs))s.logs=[];
+ formM('存入 · '+s.name,[
+  {id:'sa',l:'存入金额',t:'number',v:'',p:'负数表示取出'},
+  {id:'sa_ym',l:'存入年月',v:curYM(),p:'格式 YYYY-MM，默认本月'},
+  {id:'sa_n',l:'备注',v:'',p:'选填，如：工资转入 / 基金赎回'}
+ ],()=>{
+  const ym=val('sa_ym')||curYM();
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)){toast('存入年月格式应为 YYYY-MM，例如 '+curYM());return false}
+  s.logs.push({id:uid(),ym:ym,amt:round2(nval('sa')),note:val('sa_n'),ts:Date.now()});
+  ST.sv=ST.sv||{};ST.sv[s.id]=true;
+  save();toast('已记录 '+ym+' 存入，累计 '+money(svCur(s)));
  });
+}
+function svLogEdit(sid,lid){
+ const s=(D.finance.savings||[]).find(x=>x.id===sid);if(!s)return;
+ const l=svLogs(s).find(x=>x.id===lid);if(!l)return;
+ formM('编辑存入记录 · '+s.name,[
+  {id:'sa',l:'金额',t:'number',v:l.amt},
+  {id:'sa_ym',l:'存入年月',v:l.ym||curYM(),p:'格式 YYYY-MM'},
+  {id:'sa_n',l:'备注',v:l.note||'',p:'选填'}
+ ],()=>{
+  const ym=val('sa_ym')||l.ym||curYM();
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)){toast('存入年月格式应为 YYYY-MM，例如 '+curYM());return false}
+  l.ym=ym;l.amt=round2(nval('sa'));l.note=val('sa_n');l.ts=Date.now();
+  save();toast('已更新 '+ym+'，累计 '+money(svCur(s)));
+ });
+}
+function svLogDel(sid,lid){
+ const s=(D.finance.savings||[]).find(x=>x.id===sid);if(!s)return;
+ const l=svLogs(s).find(x=>x.id===lid);if(!l)return;
+ confirmM('删除存入记录','确定删除 <b>'+esc(l.ym||'')+'</b> 这笔 <b>'+money(l.amt)+'</b> 吗？<br>删除后该计划的累计金额会同步扣减。',()=>{
+  s.logs=svLogs(s).filter(x=>x.id!==lid);save();toast('已删除，剩余累计 '+money(svCur(s)));
+ },'删除');
 }
 /* --- 日常记账 --- */
 function finBills(){
@@ -3632,7 +3704,13 @@ async function loadBriefs(force){
   BRIEFS_TS=Date.now();
   if(CUR==='invest'&&ST.inv.tab==='news') render();
 }
-/* ===== 简报引擎：已部署页面在浏览器端定时生成（盘前 9:00 / 盘后 21:00）并原位更新，手动刷新可即时生成，无需每日重新部署 ===== */
+/* 手动同步 briefs.json 深度存档（已取消全部定时任务，需要时手动点） */
+async function briefSyncArch(){
+  await loadBriefs(true);
+  toast(BRIEFS&&BRIEFS.length?('已同步存档 · 共 '+BRIEFS.length+' 篇深度简报'):'存档为空或读取失败（本地 file:// 打开时无法读取）');
+  if(CUR==='invest'&&ST.inv.tab==='news')render();
+}
+/* ===== 简报引擎：纯手动触发 —— 点页面上「生成/更新」按钮即时拉取数据并原位改写当日简报；无任何自动定时任务 ===== */
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
 const GLOB_IDX=[['100.DJIA','道琼斯'],['100.SPX','标普500'],['100.NDX','纳斯达克'],['100.HSI','恒生指数']];
@@ -3698,6 +3776,75 @@ async function briefFetchFutures(){
   return arr.map(x=>({code:String(x.f12||''),name:String(x.f14||''),price:nv(x.f2),chg:nv(x.f3)})).filter(x=>x.name);
  }catch(e){return null;}
 }
+/* ===== 个股公告精选：东方财富公告接口（JSONP），沪深主板优先，按「利好 / 利空」关键词加权筛选 ===== */
+const ANN_API='https://np-anotice-stock.eastmoney.com/api/security/ann';
+// 偏多关键词（权重越大越优先）/ 偏空关键词 / 例行事务（剔除）
+const ANN_POS=[['回购注销',-9],['回购',3],['增持',3],['业绩预增',3],['业绩预告',2],['扭亏',3],['中标',3],['重大合同',3],['战略合作',2],['签署协议',2],['收购',2],['要约收购',3],['股权激励',1],['分红',2],['派息',2],['获批',2],['注册证书',2],['临床试验',2],['纳入',1],['投产',2],['扩产',2],['提价',3],['订单',2],['增资',1],['协议转让',1],['政府补助',2],['新产品',2],['投资建设',2],['业绩快报',1]];
+const ANN_NEG=[['减持',3],['预减',3],['预亏',3],['业绩亏损',3],['业绩下滑',3],['问询',3],['关注函',3],['处罚',3],['立案',3],['退市',3],['终止',2],['违规',3],['诉讼',1],['风险提示',2],['冻结',2],['拍卖',2],['失联',3],['辞任',-9],['辞职',-9],['高管人员任职变动',-9]];
+// 例行事务（硬剔除，永不展示）
+const ANN_ROUTINE=/股东大会|会议资料|会议通知|召开.*股东|表决权|网络投票|决议公告|更正公告|补充公告|法律意见|审计报告|跟踪评级|定期报告|季度报告|半年度报告|年度报告|受托管理|付息公告|公司章程|内部制度|职工代表|办公地址|迁址|名称变更|工商变更|证券事务代表|独董|独立董事|复牌的提示性|停牌进展|延期复牌/;
+// 低价值日常事项（质押 / 担保 / 理财 / 授信 / 权益分派实施等）：默认剔除，仅当有效公告不足 8 条时作尾部兜底
+const ANN_NOISE=/质押|担保|融资租赁|经营租赁|关联交易|委托理财|结构性存款|银行授信|借款|现金管理|募集资金|通知债权人|减少注册资本|权益分派实施|回售|兑付|转股|换股|赎回|会计师事务所|拟变更|延期回复|延期披露|自查|募投项目|注销登记|回购注销|辞任|辞职|任职变动|人事变动|接待日|业绩说明会|集体接待|投资者关系|调研活动|权益变动报告书|详式权益变动|简式权益变动|保荐|核查意见|持续督导|换届|限售股上市流通|限售股份|股份解除限售/;
+/* 仅按「公告标题」打分：栏目名（如「股份质押、冻结」）是分类而非情绪，混入会把中性公告误判偏空 */
+function annScore(t){let s=0;ANN_POS.forEach(p=>{if(t.indexOf(p[0])>=0)s+=p[1]});ANN_NEG.forEach(p=>{if(t.indexOf(p[0])>=0)s-=p[1]});return s;}
+/* 排序：偏多在前（分值高的排前）→ 中性 → 偏空（利空重的排前）；同档按日期倒序 */
+function annSort(a,b){
+ const ga=a.sc>0?0:a.sc<0?2:1,gb=b.sc>0?0:b.sc<0?2:1;
+ if(ga!==gb)return ga-gb;
+ if(ga===0)return (b.sc-a.sc)||String(b.date).localeCompare(String(a.date));
+ if(ga===2)return (a.sc-b.sc)||String(b.date).localeCompare(String(a.date));
+ return String(b.date).localeCompare(String(a.date));
+}
+/* 纯函数：原始公告数组 → 精选列表（剔除例行 / 仅沪深主板 / 三级分桶），便于单测 */
+function annPick(arr){
+ const seen=new Set(),out=[],noise=[];
+ (arr||[]).forEach(it=>{
+  const cs=it.codes||[],c0=cs[0]||{};
+  const code=String(c0.stock_code||'');
+  if(!/^(600|601|603|605|000|001|002|003)/.test(code))return;   // 仅沪深主板（剔除科创 / 创业 / 北交 / 未上市）
+  const nm=String(c0.short_name||'').replace(/\s+/g,'');
+  if(!nm||/ST/i.test(nm))return;
+  let title=String(it.title_ch||it.title||'').trim();
+  if(!title)return;
+  const col=((it.columns&&it.columns[0])||{}).column_name||'';
+  if(ANN_ROUTINE.test(title)||ANN_ROUTINE.test(col))return;      // 剔除例行事务
+  const key=code+'|'+title.slice(0,20);if(seen.has(key))return;seen.add(key);
+  const clean=(title.indexOf(nm+'：')===0||title.indexOf(nm+':')===0)?title.slice(nm.length+1).trim():title;
+  // 去掉「公司名:」前缀后若不含中文 → 定期报告英文版（如「荣盛石化:2026Semi-annualReport」），跳过
+  const cm=clean.match(/^[^:：]{2,12}[:：](.+)$/),cnBody=cm?cm[1]:clean;
+  if(!/[\u4e00-\u9fa5]/.test(cnBody))return;
+  const it0={code:code,name:nm,title:clean,col:col,date:String(it.notice_date||it.display_time||'').slice(0,10),sc:annScore(clean)};
+  (ANN_NOISE.test(clean)?noise:out).push(it0);                   // 低价值日常事项分桶，不参与主榜
+ });
+ // 三级取数：① 有明确多空信号的公告（利好在前、利空在后）→ ② 中性公告补位 → ③ 日常事项兜底（避免公告清淡日整栏为空）
+ const sig=out.filter(a=>a.sc!==0).sort(annSort);
+ const neu=out.filter(a=>a.sc===0).sort(annSort);
+ let list=sig.slice(0,10);
+ if(list.length<10)list=list.concat(neu.slice(0,10-list.length));
+ if(list.length<6){noise.sort(annSort);list=list.concat(noise.slice(0,6-list.length));}
+ return list.slice(0,30);
+}
+async function annFetch(force){
+ D.invest=D.invest||{};
+ const c=D.invest.ann;
+ if(!force&&c&&c.list&&c.list.length&&Date.now()-(c.ts||0)<10*60*1000)return c.list;
+ const url=ANN_API+'?sr=-1&page_size=150&page_index=1&ann_type=A&client_source=web&f_node=0&s_node=0';
+ const j=await jsonpGet(url,9000);
+ const arr=(j&&j.data&&j.data.list)||[];
+ const list=annPick(arr);
+ D.invest.ann={ts:Date.now(),pool:arr.length,list:list};save();
+ return list;
+}
+/* 组装「个股公告精选」正文：lead + ①~⑩ 编号明细（fmtNums 会按圆圈拆行） */
+function annBlock(list,n){
+ const top=(list||[]).slice(0,n||10);
+ if(!top.length)return null;
+ const pos=top.filter(a=>a.sc>0).length,neg=top.filter(a=>a.sc<0).length;
+ const head='今日沪深主板最新公告（本次扫描 '+(D.invest.ann&&D.invest.ann.pool||0)+' 条，剔除例行事务与质押 / 担保等日常事项后，按利好 / 利空关键词加权选出 '+top.length+' 条：偏多 '+pos+' 条、偏空 '+neg+' 条，先列利好、后列利空）';
+ const items=top.map((a,i)=>'①②③④⑤⑥⑦⑧⑨⑩'[i]+' '+a.name+'('+a.code+')：'+(a.title.length>46?a.title.slice(0,46)+'…':a.title)+
+  ' —— '+(a.sc>0?'偏多':a.sc<0?'偏空':'中性')+(a.col?(' · '+a.col):''));
+ return {head:head,items:items};
+}
 const bpc=v=>v==null?'—':(v>0?'+':'')+num(v)+'%';
 const bamt=v=>{if(v==null)return '—';const a=v/1e8;return a>=10000?(a/10000).toFixed(2)+' 万亿':a.toFixed(0)+' 亿';};
 function bline(b){return b.name+' '+bpc(b.chg)+(b.main!=null?('（主力'+flowTxt(b.main)+'）'):'')+(b.lead?('，领涨股：'+b.lead):'');}
@@ -3707,7 +3854,8 @@ function briefCompose(slot,dt,gen){
  const date=gen.getFullYear()+'-'+pad2(gen.getMonth()+1)+'-'+pad2(gen.getDate());
  const time=pad2(gen.getHours())+':'+pad2(gen.getMinutes());
  const id='b'+date.replace(/-/g,'')+(isEve?'-pm':'-am');
- const idx=dt.idx||[],boards=dt.boards||[],glob=dt.glob||[],zt=dt.zt||null,north=dt.north||null,lhb=dt.lhb||null,futs=dt.futs||null,extraIdx=dt.extraIdx||null;
+ const idx=dt.idx||[],boards=dt.boards||[],glob=dt.glob||[],zt=dt.zt||null,north=dt.north||null,lhb=dt.lhb||null,futs=dt.futs||null,extraIdx=dt.extraIdx||null,ann=dt.ann||[];
+ const AN=annBlock(ann,10);
  const sh=idx.find(x=>x.name==='上证指数')||{},sz=idx.find(x=>x.name==='深证综指')||{};
  const disp=idx.filter(x=>['上证指数','深证成指','创业板指','沪深300'].indexOf(x.name)>=0);
  const up=(sh.up||0)+(sz.up||0),down=(sh.down||0)+(sz.down||0);
@@ -3781,9 +3929,10 @@ function briefCompose(slot,dt,gen){
   sections.night='① 国内大宗商品夜盘（21:00 开盘）：'+(futs&&futs.length?futs.map(f=>f.name+' '+bpc(f.chg)).join('、'):'接口未拉通，建议人工或服务端补全')+'。'+
    '② 次日传导路径：能源（原油 / 煤炭）→ 化工 / 煤炭板块；有色（铜 / 铝 / 稀土）→ 有色板块；锂矿 → 新能源板块；'+(futs&&futs.length?('今日 '+futs.slice(0,2).map(f=>f.name).join('、')+' 走势将影响次日相关周期 / 新能源 / 有色板块开盘'):'夜盘数据缺失')+'。'+
    '③ 商品走势对周期股估值：商品持续上行 → 上游资源股业绩弹性大；商品下行 → 中游材料股成本压力缓释。';
-  sections.eveningNews='① 晚间重要消息梳理（自上而下）：海外重大事件 → 国内顶层政策 → 行业消息 → 个股公告。'+
-   '② 此板块为需要人工 / 服务端 AI 简报补全的板块：浏览器端 JSONP 接口无法抓取新闻文本，强烈建议在「我的笔记」中粘贴当日重要消息摘要。'+
-   '③ 关注事件：①海外（美联储官员讲话、欧美经济数据）；②国内顶层（国务院常务会议、政治局会议、央行货币政策报告）；③行业（产业政策、龙头公司公告、行业自律协调）；④个股（业绩预增 / 预减、回购增持、减持、停复牌、收购合并）。';
+  const eveGuide='晚间消息自上而下梳理：海外重大事件 → 国内顶层政策 → 行业消息 → 个股公告；宏观 / 政策类文本浏览器端无新闻接口，建议在「我的笔记」补齐当日重点。';
+  sections.eveningNews=AN
+   ?(eveGuide+'\n'+AN.head+'。'+(AN.items.join('\n')))
+   :(eveGuide+'\n公告抓取失败（接口限流 / 离线），点右上角按钮重新生成即可重试；也可在「我的笔记」粘贴当日重点公告摘要。');
  }else{
   // ----- 盘前 sections：overseas / policy / industry / announce / ladder / auction -----
   const rmbChg=(extraIdx&&extraIdx[0]&&extraIdx[0].chg!=null)?extraIdx[0].chg:null;
@@ -3795,10 +3944,12 @@ function briefCompose(slot,dt,gen){
    '② 大宗商品异动：能源 / 有色 / 化工（如莱茵河低水位影响化工供给 → A 股化工涨价预期；铜价异动 → A 股有色板块）。'+
    '③ 国内行业催化：龙头公司业绩预告、产业基金动向、行业自律协调、重大订单 / 合同。'+
    '④ 此板块需要人工 / 服务端补全：建议在「我的笔记」粘贴关键产业消息。';
-  sections.announce='① 个股公告分类：停复牌 / 重大合同 / 收购合并 / 回购增持 / 业绩变动 / 股东减持 / 监管异动。'+
-   '② 判断要点：利好是否被提前炒作？落地即兑现 = 谨慎；超预期 = 仍有上行空间。'+
-   '③ 减持与监管异动公告重点规避：股东减持 / 解禁 → 短期利空；监管处罚 / 问询函 → 中长期估值压制。'+
-   '④ 此板块需要人工 / 服务端补全：建议在「我的笔记」粘贴当日重点公告摘要。';
+  sections.announce=AN
+   ?(AN.head+'。判断要点：利好是否被提前炒作？落地即兑现 = 谨慎，超预期 = 仍有上行空间；减持 / 解禁 → 短期利空，监管处罚 / 问询函 → 中长期估值压制。\n'+AN.items.join('\n'))
+   :('① 个股公告分类：停复牌 / 重大合同 / 收购合并 / 回购增持 / 业绩变动 / 股东减持 / 监管异动。'+
+     '② 判断要点：利好是否被提前炒作？落地即兑现 = 谨慎；超预期 = 仍有上行空间。'+
+     '③ 减持与监管异动公告重点规避：股东减持 / 解禁 → 短期利空；监管处罚 / 问询函 → 中长期估值压制。'+
+     '④ 公告接口本次未拉通（限流 / 离线），点右上角按钮重新生成即可重试。');
   sections.ladder='① 前一日连板梯队：'+(zt?('涨停 '+zt.count+' 家、最高 '+zt.maxLb+' 连板'+(zt.zb?('，炸板 '+zt.zb+' 家'):'')+'。'):'暂无')+
    '② 封板率：'+(zt&&zt.count?(((1-(zt.zb||0)/zt.count)*100).toFixed(0)+'%'):'无')+'，'+(zt&&zt.zb!=null?(zt.zb/zt.count>0.4?'<b>封板质量一般</b>，高位断板需警惕退潮':'封板质量较好'):'需结合数据观察')+'。'+
    '③ 赚钱效应：'+(chgUpB.length?('昨日 '+chgUpB.slice(0,3).map(b=>b.name).join('、')+' 强势延续，赚钱效应偏强'):'弱势均衡')+'。'+
@@ -3824,7 +3975,9 @@ function briefCompose(slot,dt,gen){
  const avoidPicks=(isEve?outB:chgDnB).filter(b=>(isEve?((b.main||0)<0):true)).slice(0,6);
  const avoid=avoidPicks.map(b=>b.name+(isEve?('（主力净流出'+flowTxt(-Math.abs(b.main||0))+',资金撤离方向）'):('（跌 '+bpc(b.chg)+',弱势兑现）')));
  return {id,slot,date,ts:date+'T'+time+':00+08:00',market:'A股沪深',summary,points,sections,track,avoid,live:true,genTs:Date.now(),
-  detail:(isEve?'本简报为盘后复盘：基于东方财富公开行情 JSONP 接口在浏览器端实时生成（21:00 自动生成 + 手动立即生成互不冲突），覆盖指数、涨跌家数、成交、领涨领跌、连板梯队、商品夜盘与北向资金等结构化字段。':'本简报为盘前准备：基于东方财富公开行情 JSONP 接口在浏览器端实时生成（9:00 自动生成 + 手动立即生成互不冲突），覆盖隔夜外围、A 股参考、情绪周期、政策与产业消息等结构化字段；政策 / 产业 / 公告类内容需要人工或服务端补全。')+'具体规则：板块与资金为量化快照（按 mainIn / chg 排序），个股为板块成分股 top 5（基本面阈值过滤：市值 ≥30亿 / PE ∈[0,200] / PB ≤15 / 非 ST / 非涨跌停 / 换手 ≥0.5）；本简报<b>仅供参考，不构成任何投资建议</b>，投资有风险，决策需谨慎。'};
+  detail:(isEve?'本简报为盘后复盘：点「生成 / 更新盘后」按钮即时抓取东方财富公开行情与公告 JSONP 接口生成，覆盖指数、涨跌家数、成交、领涨领跌、连板梯队、商品夜盘、北向资金与当日个股公告等结构化字段。':'本简报为盘前准备：点「生成 / 更新盘前」按钮即时抓取东方财富公开行情与公告 JSONP 接口生成，覆盖隔夜外围、A 股参考、情绪周期、政策与产业消息与个股公告精选等结构化字段。')+
+  '公告口径：扫描当日沪深主板公告（剔除股东大会 / 例行事务类），按「回购增持 / 中标合同 / 业绩预增」等关键词判定偏多，'+
+  '「减持 / 问询 / 处罚 / 终止」等判定偏空，按权重取前 10 条；政策与宏观文本类内容浏览器端无新闻接口，可在「我的笔记」补充。'+'具体规则：板块与资金为量化快照（按 mainIn / chg 排序），个股为板块成分股 top 5（基本面阈值过滤：市值 ≥30亿 / PE ∈[0,200] / PB ≤15 / 非 ST / 非涨跌停 / 换手 ≥0.5）；本简报<b>仅供参考，不构成任何投资建议</b>，投资有风险，决策需谨慎。'};
 }
 async function briefGenLive(slot,force){
  if(!ST.inv)return;
@@ -3835,11 +3988,12 @@ async function briefGenLive(slot,force){
  try{
   slot=slot||briefSlotNow();
   const isEve=slot==='evening';
-  const [idx,boards,glob,zt]=await Promise.all([
+  const [idx,boards,glob,zt,ann]=await Promise.all([
    briefFetchIdx(LIVE_IDX).catch(()=>null),
    briefFetchBoards().catch(()=>null),
    briefFetchIdx(GLOB_IDX).catch(()=>null),
-   briefFetchZT().catch(()=>null)
+   briefFetchZT().catch(()=>null),
+   annFetch(!!force).catch(()=>null)   // 个股公告精选：手动点击时强制刷新
   ]);
   if(!idx&&!boards&&!glob){ST.inv.briefFailTs=Date.now();if(force)toast('简报数据抓取失败（接口限流/离线），稍后重试');return;}
   // 增量数据源：盘前拉美股 + 离岸人民币；盘后拉北向资金 + 龙虎榜 + 商品夜盘
@@ -3876,7 +4030,7 @@ async function briefGenLive(slot,force){
     if(toFetch.length&&force)toast('已为 '+toFetch.length+' 个板块预拉成分股（更新个股缓存）');
    }
   }catch(e){}
-  const b=briefCompose(slot,{idx,boards,glob,zt,north,lhb,futs,extraIdx},new Date());
+  const b=briefCompose(slot,{idx,boards,glob,zt,north,lhb,futs,extraIdx,ann},new Date());
   D.invest.liveBriefs=D.invest.liveBriefs||{};
   D.invest.liveBriefs[b.id]=b;save();
   ST.inv.briefFailTs=0;
@@ -3889,37 +4043,11 @@ async function briefGenLive(slot,force){
   if(pend)setTimeout(function(){briefGenLive(null,true)},80); // 排队中的手动刷新补跑
  }
 }
-/* ===== 简报定时调度：盘前 9:00 / 盘后 21:00 各自动生成一次；未到定时点时手动「立即生成」可即时拉取数据生成，定时到点仍会补齐 ===== */
-const BRIEF_SCHED={morning:9,evening:21};
+/* ===== 无自动生成：已彻底移除定时调度（浏览器端定时器 + 服务端自动化任务均已取消），简报只在用户点按钮时更新 ===== */
+const BRIEF_SCHED={morning:9,evening:21};   // 仅保留「上午 / 下午」两个时段标识用于 id，不参与任何调度
 function briefSchedId(slot,d){
  const p=x=>String(x).padStart(2,'0');
  return 'b'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+(slot==='evening'?'-pm':'-am');
-}
-function briefSchedAt(slot,d){const at=new Date(d.getTime());at.setHours(BRIEF_SCHED[slot],0,0,0);return at.getTime();}
-/* 返回当前「已到定时点但尚未按定时点生成」的时段；手动提前生成（genTs 早于定时点）不取消定时补齐 */
-function briefSchedDue(now){
- now=now||new Date();
- for(const slot of ['morning','evening']){
-  const at=briefSchedAt(slot,now);
-  if(now.getTime()<at)continue;
-  const cur=(D.invest.liveBriefs||{})[briefSchedId(slot,now)];
-  if(!cur||(cur.genTs||0)<at)return slot;
- }
- return null;
-}
-/* 下一次自动生成时刻（界面提示用） */
-function briefNextTxt(now){
- now=now||new Date();
- if(now.getHours()<BRIEF_SCHED.morning)return '今日 9:00 盘前';
- if(now.getHours()<BRIEF_SCHED.evening)return '今日 21:00 盘后';
- return '明日 9:00 盘前';
-}
-function briefSchedRun(){
- if(!ST.inv)return;
- const slot=briefSchedDue();
- if(!slot)return;
- if(Date.now()-(ST.inv.briefFailTs||0)<5*60*1000)return; // 抓取失败退避 5 分钟，避免定时循环重试刷屏
- briefGenLive(slot,true);
 }
 const SEC_CLS={'半导体':'p','芯片':'p','集成电路':'p','新能源':'g','光伏':'g','锂电':'g','储能':'g','电动车':'g','汽车':'g','医药':'r','医疗':'r','创新药':'r','消费':'o','白酒':'o','食品':'o','家电':'o','金融':'b','银行':'b','券商':'b','保险':'b','地产':'y','军工':'p','科技':'p','AI':'p','人工智能':'p','机器人':'p','计算机':'p','电子':'p','通信':'b','传媒':'y','农业':'g','有色':'y','煤炭':'y','钢铁':'y','化工':'b','电力':'b','港股':'o','美股':'b','军工电子':'p','低空经济':'p','商业航天':'p'};
 function invNews(){
@@ -3933,25 +4061,7 @@ function invNews(){
   const bq=(ST.inv.bq||'').trim();
   const bslot=ST.inv.bslot||'';
   const bdate=(ST.inv.bdate||'').trim();
-  const liveMap=(D.invest.liveBriefs=D.invest.liveBriefs||{});
-  let all=(BRIEFS||[]).slice();
-  // 合并策略：briefs.json 中「服务端 AI 深度简报」（盘前 9:00 / 盘后 21:00 自动化定时生成，含龙虎榜/消息面/夜盘等深度解读）是叙事与板块解读的权威来源；
-  // 浏览器端实时简报只作「存档缺失时的兜底 / 量化数据增量补充」，不再覆盖存档的板块解读。这样盘前/盘后深度内容都能在网页展示，并消除实时版大量"待补"空板块。
-  const archiveIds=new Set((BRIEFS||[]).map(x=>x.id));            // 哪些 id 是服务端 AI 深度存档
-  Object.keys(liveMap).forEach(k=>{ if(!all.find(x=>x.id===k)) all.push(liveMap[k]); }); // 仅追加存档中没有的实时条目
-  all=all.map(b=>{
-    const lv=liveMap[b.id];
-    if(!lv) return Object.assign({},b,{_src:'ai'});                // 仅存档：标记 AI 深度来源
-    if(!archiveIds.has(b.id)) return b;                           // 仅实时（无存档）：保留原样 → 显示"页面生成"
-    const out=Object.assign({},b);                                // 存档+实时同 id：存档解读优先，实时仅补缺
-    out.sections=Object.assign({},lv.sections||{},b.sections||{});
-    ['summary','detail'].forEach(f=>{ if(!out[f]&&lv[f]) out[f]=lv[f]; });
-    if(!(b.points&&b.points.length)&&lv.points) out.points=lv.points;
-    if(!(b.track&&b.track.length)&&lv.track) out.track=lv.track;
-    if(!(b.avoid&&b.avoid.length)&&lv.avoid) out.avoid=lv.avoid;
-    out._src='ai';
-    return out;
-  });
+  const all=briefMerged();
   let list=all.sort((a,b)=>String(b.ts||b.date).localeCompare(String(a.ts||a.date)));
   const hasF=bslot||bdate||bq;
   if(hasF){
@@ -3977,16 +4087,17 @@ function invNews(){
     '<button class="btn sm pri" onclick="ST.inv.bq=this.previousElementSibling.value;render()">搜索</button>'+
     (hasF?'<button class="btn sm" onclick="ST.inv.bq=\'\';ST.inv.bslot=\'\';ST.inv.bdate=\'\';render()">清除</button>':'')+
     '</div>';
-  const mslot=briefSlotNow();
+  const mslot=briefSlotNow(),mlabel=mslot==='evening'?'盘后':'盘前';
+  const genBtn='<button class="btn sm '+(ST.inv.briefBusy?'gh':'pri')+'" onclick="briefGenLive(null,true)" title="点击即刻抓取最新行情、板块资金、连板、商品夜盘与个股公告，并改写当日'+mlabel+'简报">'+ic('refresh',13)+(ST.inv.briefBusy?'生成中…':('生成 / 更新'+mlabel))+'</button>';
+  const syncBtn='<button class="btn sm" onclick="briefSyncArch()" title="重新拉取 briefs.json 深度存档（同步最新上传的 AI 简报）">'+ic('upload',13)+'同步存档</button>';
   return bbar+'<div class="card"><div class="ch"><h3>'+ic('bulb',15)+'每日市场简报</h3>'+
-   '<span class="sub">A股沪深 · 每日 9:00 盘前 / 21:00 盘后定时生成 · 下次：'+briefNextTxt()+'</span><div class="sp"></div>'+
-   '<button class="btn sm '+(ST.inv.briefBusy?'gh':'pri')+'" onclick="briefGenLive(null,true)" title="未到定时点也可立即拉取最新市场数据生成本时段简报">'+ic('refresh',13)+(ST.inv.briefBusy?'生成中…':('立即生成'+(mslot==='evening'?'盘后':'盘前')))+'</button></div>'+
+   '<span class="sub">A股沪深 · 手动更新：点按钮即刻抓取数据并改写当日简报（无定时任务）</span><div class="sp"></div>'+syncBtn+genBtn+'</div>'+
    (BRIEFS===null?'<div class="empty">'+ic('clock',28)+'正在加载简报…</div>':
     (hasF?fbar:'')+
     (list.length?
       (hasF?'<div class="sub" style="margin:2px 2px 8px">命中 '+list.length+' / '+all.length+' 条</div>':'')+
       '<div style="display:flex;flex-direction:column;gap:10px">'+list.map(b=>briefCard(b,M[b.id]||{})).join('')+'</div>'
-    :'<div class="empty">'+ic('bulb',30)+(hasF?'没有符合筛选条件的简报':'暂无简报：每日 9:00 / 21:00 自动生成（下次 '+briefNextTxt()+'），也可点右上角按钮立即生成')+'</div>')
+    :'<div class="empty">'+ic('bulb',30)+(hasF?'没有符合筛选条件的简报':'暂无简报：点右上角「生成 / 更新'+mlabel+'」按钮，即刻抓取最新数据生成当日简报')+'</div>')
    )+'</div>';
 }
 const MORN_SECS=[
@@ -4061,7 +4172,7 @@ function briefCard(b,m){
   return '<div style="border:1px solid var(--line);border-radius:12px;padding:11px 13px;background:#fff">'+
    '<div style="display:flex;align-items:center;gap:7px;margin-bottom:7px;flex-wrap:wrap">'+
     '<span class="tag '+slotCls+'">'+slot+'</span>'+
-    (b._src==='ai'?'<span class="tag b" title="AI 深度简报：服务端定时（9:00 盘前 / 21:00 盘后）生成并写入 briefs.json，含龙虎榜、消息面、夜盘等深度解读">AI 深度 · '+(String(b.ts||'').slice(11,16)||'')+'</span>':(b.live?'<span class="tag g" title="浏览器端定时（9:00/21:00）或手动立即生成，数据抓取自公开行情接口">页面生成 · '+(String(b.ts||'').slice(11,16)||'')+'</span>':''))+
+    (b._src==='ai'?'<span class="tag b" title="AI 深度简报：写入 briefs.json 的深度解读存档，人工检索核对后可随时上传更新">AI 深度 · '+(String(b.ts||'').slice(11,16)||'')+'</span>':(b.live?'<span class="tag g" title="点「生成 / 更新」按钮即时抓取：东方财富公开行情与公告接口">页面生成 · '+(String(b.ts||'').slice(11,16)||'')+'</span>':''))+
     '<b style="font-size:13px">'+esc(b.date||'')+'</b>'+
     '<span style="font-size:11px;color:var(--ink3);flex:1">'+esc(b.market||'A股')+'</span>'+
     '<button class="btn sm gh" onmousedown="event.preventDefault()" onclick="briefHl(\''+b.id+'\')" title="选中正文文字后点此高亮" style="'+(m.hl&&m.hl.length?'color:var(--brand)':'opacity:.5')+'">'+ic('star',13)+'</button>'+
@@ -4076,8 +4187,10 @@ function briefCard(b,m){
    noteHtml+
    '</div>';
 }
-/* ===== 盘前 / 盘后 子页面：嵌套于「理财炒股 → 每日简报」标签内（invNews 顶部子标签切换：盘前简报 / 盘后简报 / 全部简报），复用简报引擎数据与卡片、按 slot 过滤；生成仍由浏览器端 briefSchedRun（9:00 盘前 / 21:00 盘后）驱动，不新增任何定时任务 / 通知 / 邮件 ===== */
-/* 合并 briefs.json（服务端 AI 深度存档，叙事/板块解读权威）与 liveBriefs（浏览器端定时或手动生成），按 id 去重、存档解读优先 */
+/* ===== 盘前 / 盘后 子页面：嵌套于「理财炒股 → 每日简报」标签内（invNews 顶部子标签切换：盘前简报 / 盘后简报 / 全部简报），复用简报引擎数据与卡片、按 slot 过滤；内容只在用户点按钮时更新 ===== */
+/* 合并 briefs.json（AI 深度存档，叙事/板块解读权威）与 liveBriefs（点按钮手动生成），按 id 去重、存档解读优先 */
+const BRIEF_PH=/需要人工|尚未拉通|接口未拉取|接口未获取|本次未拉通|请检查网络或接口/;
+const briefIsPh=v=>!v||BRIEF_PH.test(String(v));
 function briefMerged(){
   const liveMap=(D.invest.liveBriefs=D.invest.liveBriefs||{});
   const archiveIds=new Set((BRIEFS||[]).map(x=>x.id));
@@ -4087,9 +4200,15 @@ function briefMerged(){
     const lv=liveMap[b.id];
     if(!lv) return Object.assign({},b,{_src:'ai'});                 // 仅存档：标记 AI 深度来源
     if(!archiveIds.has(b.id)) return b;                            // 仅实时（无存档）：保留原样
-    const out=Object.assign({},b);                                 // 存档+实时同 id：存档解读优先，实时仅补缺
-    out.sections=Object.assign({},lv.sections||{},b.sections||{});
-    ['summary','detail'].forEach(f=>{ if(!out[f]&&lv[f]) out[f]=lv[f]; });
+    const out=Object.assign({},b);                                 // 存档+实时同 id：存档解读优先
+    const ks={};Object.keys(lv.sections||{}).concat(Object.keys(b.sections||{})).forEach(k=>{ks[k]=1});
+    const sec={};
+    Object.keys(ks).forEach(k=>{                                   // 存档段落若是「待人工补全」占位话术而实时版抓到了真实内容，则用实时版
+      const av=(b.sections||{})[k],lvv=(lv.sections||{})[k];
+      sec[k]=(briefIsPh(av)&&!briefIsPh(lvv))?lvv:av;
+    });
+    out.sections=sec;
+    ['summary','detail'].forEach(f=>{ if(briefIsPh(out[f])&&!briefIsPh(lv[f])) out[f]=lv[f]; });
     if(!(b.points&&b.points.length)&&lv.points) out.points=lv.points;
     if(!(b.track&&b.track.length)&&lv.track) out.track=lv.track;
     if(!(b.avoid&&b.avoid.length)&&lv.avoid) out.avoid=lv.avoid;
@@ -4101,7 +4220,7 @@ function briefMerged(){
 function briefPage(slot){
   const isEve=slot==='evening';
   const slotLabel=isEve?'盘后':'盘前';
-  const slotHour=BRIEF_SCHED[slot];
+  const slotHour=isEve?21:9;
   const todayId=briefSchedId(slot,new Date());
   const M=(D.invest.briefMarks=D.invest.briefMarks||{});
   if(BRIEFS===null||Date.now()-BRIEFS_TS>300000) loadBriefs();
@@ -4110,27 +4229,27 @@ function briefPage(slot){
   const today=all.find(b=>b.id===todayId)||null;
   const hist=all.filter(b=>b.id!==todayId);
   const busy=!!ST.inv.briefBusy;
-  const nextTxt=briefNextTxt();
   const sameSlotNow=briefSlotNow()===slot;
   const head='<div class="card"><div class="ch"><h3>'+ic(isEve?'moon':'sun',15)+slotLabel+'简报</h3>'+
-    '<span class="sub">A股沪深 · 每日 '+slotHour+':00 '+slotLabel+'定时生成 · 下次：'+nextTxt+'</span><div class="sp"></div>'+
-    '<button class="btn sm '+(busy?'gh':'pri')+'" onclick="briefGenLive(\''+slot+'\',true)" title="未到定时点也可立即拉取最新市场数据生成当日'+slotLabel+'简报">'+ic('refresh',13)+(busy?'生成中…':'立即生成'+slotLabel)+'</button></div>';
+    '<span class="sub">A股沪深 · 手动更新：点按钮即刻抓取最新数据并改写当日'+slotLabel+'简报（无定时任务）</span><div class="sp"></div>'+
+    '<button class="btn sm" onclick="briefSyncArch()" title="重新拉取 briefs.json 深度存档">'+ic('upload',13)+'同步存档</button>'+
+    '<button class="btn sm '+(busy?'gh':'pri')+'" onclick="briefGenLive(\''+slot+'\',true)" title="点击即刻抓取最新行情、板块资金、'+(isEve?'龙虎榜 / 商品夜盘':'连板梯队')+'与个股公告，更新当日'+slotLabel+'简报">'+ic('refresh',13)+(busy?'生成中…':('生成 / 更新'+slotLabel))+'</button></div>';
   if(BRIEFS===null) return head+'<div class="empty">'+ic('clock',28)+'正在加载简报…</div></div>';
   let body='';
   if(today){
-    body+='<div class="sub" style="margin:2px 2px 8px">今日（'+esc(today.date||'')+'）'+slotLabel+'简报 · 已生成并固化，刷新不改动</div>'+
+    body+='<div class="sub" style="margin:2px 2px 8px">今日（'+esc(today.date||'')+'）'+slotLabel+'简报 · 生成于 '+esc(String(today.ts||'').slice(11,16)||'—')+'，再次点「生成 / 更新」即刷新</div>'+
       briefCard(today,M[today.id]||{});
   }else{
     body+='<div class="empty" style="margin:6px 0 10px">'+ic('clock',26)+'今日'+slotLabel+'简报尚未生成'+
-      (sameSlotNow?'：当前处于'+slotLabel+'时段，点右上角「立即生成'+slotLabel+'」可即时拉取，或等待 '+slotHour+':00 自动生成'
-                  :'：将于今日 '+slotHour+':00 自动生成')+'</div>';
+      (sameSlotNow?'：当前处于'+slotLabel+'时段，点右上角「生成 / 更新'+slotLabel+'」即可拉取当日数据'
+                  :'：现在不是'+slotLabel+'时段，点右上角按钮仍可按当前数据生成')+'</div>';
   }
   if(hist.length){
     body+='<div class="sub" style="margin:14px 2px 8px">历史'+slotLabel+'简报（'+hist.length+' 篇）</div>'+
       '<div style="display:flex;flex-direction:column;gap:10px">'+hist.map(b=>briefCard(b,M[b.id]||{})).join('')+'</div>';
   }
   if(!today&&!hist.length){
-    body='<div class="empty">'+ic('bulb',30)+'暂无'+slotLabel+'简报：每日 '+slotHour+':00 自动生成（下次 '+nextTxt+'），也可点右上角按钮立即生成</div>';
+    body='<div class="empty">'+ic('bulb',30)+'暂无'+slotLabel+'简报：点右上角「生成 / 更新'+slotLabel+'」按钮即可抓取最新数据生成当日简报</div>';
   }
   return head+body+'</div>';
 }
@@ -5711,9 +5830,7 @@ if(!MODS.some(m=>m.k===CUR))CUR='calendar';
 window.addEventListener('hashchange',()=>{const k=(location.hash||'#calendar').slice(1);
  if(k!==CUR&&MODS.some(m=>m.k===k)){CUR=k;render()}});
 render();
-/* 市场简报定时生成：盘前 9:00 / 盘后 21:00 自动触发；页面加载/浏览器刷新时自动补齐当日到点未生成的简报；手动「立即生成」随时可用，与定时互不冲突 */
-try{briefSchedRun();}catch(e){}
-setInterval(function(){try{briefSchedRun()}catch(e){}},60*1000);
+/* 简报不再有任何定时/自动触发：内容只在用户点击「生成 / 更新」按钮时更新（loadBriefs 仅读取静态存档，不触发网络抓取） */
 if('serviceWorker' in navigator&&location.protocol.startsWith('http'))
  navigator.serviceWorker.register('sw.js').catch(()=>{});
 /* 应用内「安装到桌面」按钮：主动捕获 beforeinstallprompt，不依赖地址栏图标 */
