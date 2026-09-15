@@ -221,6 +221,12 @@ box-shadow:0 8px 26px rgba(0,0,0,.25)}
 color:var(--ink2);font-weight:500;transition:.15s;min-height:32px;display:flex;align-items:center}
 .tab:hover{color:var(--ink)}
 .tab.on{background:#fff;color:var(--brand);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.07)}
+/* 持仓体检 / 持仓复盘 标签筛选条：复用 .tab 视觉，三档等宽 + 窄屏可横向滚动 */
+.wf{display:flex;gap:5px;background:var(--line2);padding:4px;border-radius:11px;overflow-x:auto;margin-top:8px}
+.wf::-webkit-scrollbar{display:none}
+.wf .tab{flex:1 1 auto;justify-content:center;gap:4px;padding:5px 10px;font-size:12px;min-height:30px}
+.wf .tab em{font-style:normal;font-size:10.5px;opacity:.7}
+@media(max-width:400px){.wf .tab{padding:5px 6px;font-size:11.5px;min-height:28px}.wf{padding:3px;gap:4px}}
 
 /* ===== 日历 ===== */
 .calgrid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,.95fr);gap:14px;align-items:start}.calgrid>*{min-width:0}
@@ -2168,7 +2174,7 @@ function budgetSet(){
 
 <script id="mod-invest">
 /* ==================== 💹 理财炒股 ==================== */
-ST.inv={tab:'stock',sub:'list',rq:'',sq:'',fkind:'定投',pat:'w',patBoard:'all',patScan:false,patDone:0,patTotal:0,flowKind:'hy',open:null};
+ST.inv={tab:'stock',sub:'list',rq:'',sq:'',fkind:'定投',pat:'w',patBoard:'all',patScan:false,patDone:0,patTotal:0,flowKind:'hy',open:null,wf:{}};
 function secid(c){
  c=String(c).trim().toUpperCase().replace(/^(SH|SZ|BJ)/,'');
  if(/^(6|5|9|11|13|18|20)/.test(c))return '1.'+c;
@@ -3745,7 +3751,7 @@ async function briefSyncArch(){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 /* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
    ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
-const BUILD='2026-09-15.4';
+const BUILD='2026-09-15.5';
 /* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
 let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
@@ -4307,7 +4313,7 @@ function briefCompose(slot,dt,gen){
    if(it.note)info.push('备注：'+(it.note.length>30?it.note.slice(0,30)+'…':it.note));
    watch.push({kind:it.kind,code:it.code,name:name,chg:q.chg,turn:q.turn,flow:q.flow,sup:sup,res:res,tag:tag,info:info});
   });
-  watch.sort((a,b)=>(a.tag==='风险较高'?0:a.tag==='谨慎观察'?1:2)-(b.tag==='风险较高'?0:b.tag==='谨慎观察'?1:2));
+  watch.sort((a,b)=>watchTagRank(a.tag)-watchTagRank(b.tag));
  }
  // ========== sectorChance（盘前：板块机会梳理，含代表个股 / 持续性 / 风险） ==========
  let sectorChance=[];
@@ -4343,7 +4349,7 @@ function briefCompose(slot,dt,gen){
    if(sup!=null&&q.price<=sup*1.005)sig.push('跌破支撑');
    if(res!=null&&q.price>=res*0.995)sig.push('突破压力');
    if(q.k&&q.k.bull)sig.push('均线多头');
-   const tag=(q.chg!=null&&q.chg<=-3)?'风险警示':(sig.indexOf('跌破支撑')>=0||sig.indexOf('长上影')>=0)?'减仓观察':'继续跟踪';
+   const tag=(q.chg!=null&&q.chg<=-3)?'风险较高':(sig.indexOf('跌破支撑')>=0||sig.indexOf('长上影')>=0)?'谨慎观察':'重点跟踪';
    const info=[];
    info.push('今日 '+(q.chg!=null?bpc(q.chg):'—')+'（'+strength+'）');
    if(q.amt!=null)info.push('成交额 '+bamt(q.amt));
@@ -4355,7 +4361,7 @@ function briefCompose(slot,dt,gen){
    if(a)info.push('公告：'+(a.title.length>28?a.title.slice(0,28)+'…':a.title));
    return {code:code,name:name,chg:q.chg,flow:q.flow,turn:q.turn,strength:strength,signal:sig,sup:sup,res:res,tag:tag,info:info};
   }).filter(Boolean);
-  holdReview.sort((a,b)=>(a.tag==='风险警示'?0:a.tag==='减仓观察'?1:2)-(b.tag==='风险警示'?0:b.tag==='减仓观察'?1:2));
+  holdReview.sort((a,b)=>watchTagRank(a.tag)-watchTagRank(b.tag));
  }
  // ========== overseasEve（盘后：美股 / 港股 / 外围观察，表格 + 结论） ==========
  let overseasEve=null;
@@ -4547,29 +4553,68 @@ function fmtNums(v,hl){
   return out;
 }
 const BRIEF_EXTRA=['watch','sectorChance','holdReview','overseasEve'];
-const BE_TAG=t=>((t==='重点跟踪'||t==='继续跟踪')?'g':(t==='风险较高'||t==='风险警示')?'r':'y');
+// ===== 持仓体检（盘前）/ 持仓复盘（盘后）标签筛选：三档固定，每只个股必属且仅属其一 =====
+const WTAGS=['重点跟踪','谨慎观察','风险较高'];
+const WTAG_CLS={'重点跟踪':'g','谨慎观察':'y','风险较高':'r'};
+/* 旧存档里盘后用的是「继续跟踪 / 减仓观察 / 风险警示」，统一归一到三档；
+   未知或缺失一律兜底为「重点跟踪」，保证任何个股都能落进某一档、不会漏项 */
+function watchTagOf(t){
+ const s=String(t||'');
+ if(s==='谨慎观察'||s==='减仓观察')return '谨慎观察';
+ if(s==='风险较高'||s==='风险警示')return '风险较高';
+ return '重点跟踪';
+}
+function watchTagRank(t){const i=WTAGS.indexOf(watchTagOf(t));return i<0?0:i}
+const BE_TAG=t=>(WTAG_CLS[watchTagOf(t)]||'g');
+/* 状态按「简报 id + 模块」双键存放：盘前 / 盘后各自独立，互不干扰 */
+function wfKey(b,isEve){return String((b&&b.id)||'')+'|'+(isEve?'hold':'watch')}
+function wfGet(b,isEve){
+ const m=ST.inv.wf||(ST.inv.wf={});
+ const v=m[wfKey(b,isEve)];
+ return WTAGS.indexOf(v)>=0?v:'重点跟踪';          // 默认选中「重点跟踪」
+}
+function wfSet(k,t){if(WTAGS.indexOf(t)<0)return;ST.inv.wf=ST.inv.wf||{};ST.inv.wf[k]=t;render()}
+/* 筛选条：三档等宽 + 每档实时计数，当前项 .on 高亮 */
+function wfBar(b,list,isEve){
+ const k=wfKey(b,isEve),cur=wfGet(b,isEve);
+ const cnt=t=>list.filter(x=>watchTagOf(x.tag)===t).length;
+ return '<div class="wf">'+WTAGS.map(t=>
+   '<div class="tab'+(cur===t?' on':'')+'" onclick="wfSet(\''+esc(k)+'\',\''+t+'\')">'+
+    '<span>'+esc(t)+'</span><em>'+cnt(t)+'</em></div>').join('')+'</div>';
+}
+/* 单个股卡片：沿用原字段与样式，仅标签改为归一后的三档 */
+function wfItem(w,showHold){
+ const chgCls=w.chg==null?'var(--ink2)':w.chg>0?'var(--red)':w.chg<0?'var(--green)':'var(--ink2)';
+ const tag=watchTagOf(w.tag);
+ return '<div style="border:1px solid var(--line);border-radius:9px;padding:7px 9px">'+
+  '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">'+
+   '<b style="font-size:13px">'+esc(w.name)+'</b>'+
+   '<span style="font-size:11px;color:var(--ink3)">'+esc(w.code)+'</span>'+
+   (showHold&&w.kind==='hold'?'<span class="tag b" style="font-size:10px;padding:1px 5px">持仓</span>':'')+
+   '<span class="tag '+BE_TAG(w.tag)+'" style="font-size:10px;padding:1px 6px">'+esc(tag)+'</span>'+
+   '<span style="font-size:11.5px;color:'+chgCls+'">'+bpc(w.chg)+'</span>'+
+  '</div>'+
+  '<div style="font-size:11.5px;color:var(--ink2);line-height:1.7">'+((w.info||[]).map(i=>'· '+esc(i)).join('<br>'))+'</div>'+
+ '</div>';
+}
+/* 模块外壳：标题 + 筛选条 + 按选中标签渲染（空档位给出空状态提示） */
+function wfBlock(b,list,title,cls,isEve,showHold){
+ if(!list||!list.length)return '';
+ const cur=wfGet(b,isEve);
+ const shown=list.filter(x=>watchTagOf(x.tag)===cur);
+ return '<div style="margin-top:12px;padding-top:9px;border-top:1px dashed var(--line2)">'+
+   '<span class="tag '+cls+'" style="font-weight:700;font-size:12px">'+esc(title)+'</span>'+
+   wfBar(b,list,isEve)+
+   (shown.length
+     ?'<div style="display:flex;flex-direction:column;gap:7px;margin-top:7px">'+shown.map(w=>wfItem(w,showHold)).join('')+'</div>'
+     :'<div class="empty" style="padding:18px 10px">'+ic('box',26)+'「'+esc(cur)+'」暂无个股</div>')+
+ '</div>';
+}
 function briefExtraHtml(b){
  const isEve=b.slot==='evening';
  let h='';
  if(!isEve){
-  if(b.watch&&b.watch.length){
-   h+='<div style="margin-top:12px;padding-top:9px;border-top:1px dashed var(--line2)">'+
-     '<span class="tag b" style="font-weight:700;font-size:12px">自选股 / 持仓体检（盘前）</span>'+
-     '<div style="display:flex;flex-direction:column;gap:7px;margin-top:7px">'+
-     b.watch.map(w=>{
-      const chgCls=w.chg==null?'var(--ink2)':w.chg>0?'var(--red)':w.chg<0?'var(--green)':'var(--ink2)';
-      return '<div style="border:1px solid var(--line);border-radius:9px;padding:7px 9px">'+
-       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">'+
-        '<b style="font-size:13px">'+esc(w.name)+'</b>'+
-        '<span style="font-size:11px;color:var(--ink3)">'+esc(w.code)+'</span>'+
-        (w.kind==='hold'?'<span class="tag b" style="font-size:10px;padding:1px 5px">持仓</span>':'')+
-        '<span class="tag '+BE_TAG(w.tag)+'" style="font-size:10px;padding:1px 6px">'+w.tag+'</span>'+
-        '<span style="font-size:11.5px;color:'+chgCls+'">'+bpc(w.chg)+'</span>'+
-       '</div>'+
-       '<div style="font-size:11.5px;color:var(--ink2);line-height:1.7">'+w.info.map(i=>'· '+esc(i)).join('<br>')+'</div>'+
-      '</div>';
-     }).join('')+'</div></div>';
-  }
+  if(b.watch&&b.watch.length)h+=wfBlock(b,b.watch,'自选股 / 持仓体检（盘前）','b',false,true);
   if(b.sectorChance&&b.sectorChance.length){
    h+='<div style="margin-top:12px;padding-top:9px;border-top:1px dashed var(--line2)">'+
      '<span class="tag p" style="font-weight:700;font-size:12px">板块机会梳理（盘前）</span>'+
@@ -4589,23 +4634,7 @@ function briefExtraHtml(b){
      }).join('')+'</div></div>';
   }
  } else {
-  if(b.holdReview&&b.holdReview.length){
-   h+='<div style="margin-top:12px;padding-top:9px;border-top:1px dashed var(--line2)">'+
-     '<span class="tag p" style="font-weight:700;font-size:12px">持仓复盘（盘后）</span>'+
-     '<div style="display:flex;flex-direction:column;gap:7px;margin-top:7px">'+
-     b.holdReview.map(w=>{
-      const chgCls=w.chg==null?'var(--ink2)':w.chg>0?'var(--red)':w.chg<0?'var(--green)':'var(--ink2)';
-      return '<div style="border:1px solid var(--line);border-radius:9px;padding:7px 9px">'+
-       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">'+
-        '<b style="font-size:13px">'+esc(w.name)+'</b>'+
-        '<span style="font-size:11px;color:var(--ink3)">'+esc(w.code)+'</span>'+
-        '<span class="tag '+BE_TAG(w.tag)+'" style="font-size:10px;padding:1px 6px">'+w.tag+'</span>'+
-        '<span style="font-size:11.5px;color:'+chgCls+'">'+bpc(w.chg)+'</span>'+
-       '</div>'+
-       '<div style="font-size:11.5px;color:var(--ink2);line-height:1.7">'+w.info.map(i=>'· '+esc(i)).join('<br>')+'</div>'+
-      '</div>';
-     }).join('')+'</div></div>';
-  }
+  if(b.holdReview&&b.holdReview.length)h+=wfBlock(b,b.holdReview,'持仓复盘（盘后）','p',true,false);
   if(b.overseasEve){
    const rows=(b.overseasEve.rows||[]).map(r=>'<tr><td style="padding:3px 8px;font-size:12px">'+esc(r.name)+'</td><td style="padding:3px 8px;font-size:12px;text-align:right;color:'+(r.chg>0?'var(--red)':r.chg<0?'var(--green)':'var(--ink2)')+'">'+bpc(r.chg)+'</td></tr>').join('');
    h+='<div style="margin-top:12px;padding-top:9px;border-top:1px dashed var(--line2)">'+
