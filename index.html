@@ -227,6 +227,29 @@ color:var(--ink2);font-weight:500;transition:.15s;min-height:32px;display:flex;a
 .wf .tab{flex:1 1 auto;justify-content:center;gap:4px;padding:5px 10px;font-size:12px;min-height:30px}
 .wf .tab em{font-style:normal;font-size:10.5px;opacity:.7}
 @media(max-width:400px){.wf .tab{padding:5px 6px;font-size:11.5px;min-height:28px}.wf{padding:3px;gap:4px}}
+/* 个股卡片：现价 / 换手 / 主力 / 支撑 四字段两列（左列现价·换手，右列主力·支撑），备注紧跟涨跌幅 */
+.wcard{border:1px solid var(--line);border-radius:9px;padding:7px 9px}
+.whead{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.whead .nm{font-size:13px}
+.whead .cd{font-size:11px;color:var(--ink3)}
+.wend{margin-left:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;min-width:0}
+.wchg{font-size:11.5px;white-space:nowrap}
+.wnote{max-width:132px;font-size:11px;color:var(--ink2);background:var(--line2);border-radius:6px;padding:1px 6px;
+white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wgrid{display:grid;grid-template-columns:1fr 1fr;gap:5px 10px;margin-top:6px}
+.wgrid>div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.wcell{display:flex;align-items:baseline;gap:5px;min-width:0}
+.wcell i{font-style:normal;font-size:10.5px;color:var(--ink3);flex:0 0 auto}
+.wcell b{font-size:12px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wcell s{text-decoration:none;font-size:10px;color:var(--ink3);flex:0 0 auto}
+.wrest{font-size:11.5px;color:var(--ink2);margin-top:5px}
+.wrest .wcell i{font-size:10px}
+.wrest .wcell b{font-size:11.5px;font-weight:400;white-space:normal;overflow:visible;text-overflow:clip;line-height:1.5;word-break:break-word}
+.wfull{grid-column:1/-1}
+.wann{grid-column:1/-1;border-top:1px dashed var(--line);padding-top:5px;margin-top:1px}
+.wann .wcell{align-items:flex-start}
+@media(max-width:400px){.wgrid{gap:4px 8px}.wnote{max-width:92px;font-size:10.5px}
+.wcell i{font-size:10px}.wcell b{font-size:11.5px}.wcell s{font-size:9.5px}.wrest .wcell b{font-size:11px}}
 
 /* ===== 日历 ===== */
 .calgrid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,.95fr);gap:14px;align-items:start}.calgrid>*{min-width:0}
@@ -3751,7 +3774,7 @@ async function briefSyncArch(){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 /* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
    ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
-const BUILD='2026-09-15.5';
+const BUILD='2026-09-15.8';
 /* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
 let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
@@ -4290,7 +4313,7 @@ function briefCompose(slot,dt,gen){
   const stk=(D.invest&&D.invest.stocks)||[],hold=(D.invest&&D.invest.holds)||[];
   const seen=new Set(),items=[];
   stk.forEach(s=>items.push({kind:'stock',code:String(s.code||'').replace(/^(SH|SZ|BJ)/i,''),name:s.name||'',note:s.note||''}));
-  hold.forEach(h=>items.push({kind:'hold',code:String(h.code||'').replace(/^(SH|SZ|BJ)/i,''),name:h.name||'',cost:+h.cost}));
+  hold.forEach(h=>items.push({kind:'hold',code:String(h.code||'').replace(/^(SH|SZ|BJ)/i,''),name:h.name||'',cost:+(h.avg||h.cur||0)}));
   items.forEach(it=>{
    if(!it.code||seen.has(it.code))return;seen.add(it.code);
    const q=stkQ[it.code];if(!q||q.price==null)return;
@@ -4302,16 +4325,12 @@ function briefCompose(slot,dt,gen){
    let tag='重点跟踪';
    if(q.chg!=null&&q.chg<=-3)tag='风险较高';
    else if((q.pe!=null&&q.pe>80)||(q.turn!=null&&q.turn>15)||(q.chg!=null&&q.chg>=6))tag='谨慎观察';
+   /* 现价 / 换手 / 主力 / 支撑 / 备注 已改为结构化字段（由卡片两列区承载），不再塞进 info 文本行 */
    const info=[];
-   info.push('现价 '+num(q.price,2)+(q.chg!=null?('（'+bpc(q.chg)+'）'):''));
-   if(q.turn!=null)info.push('换手 '+num(q.turn,2)+'%（'+(volState||'—')+'）');
-   if(q.flow!=null)info.push('主力 '+(q.flow>=0?'净流入':'净流出')+flowTxt(Math.abs(q.flow)));
-   if(sup!=null&&res!=null)info.push('支撑 '+num(sup,2)+' / 压力 '+num(res,2));
    if(q.pe!=null)info.push('PE '+num(q.pe,1)+(q.pb!=null?(' · PB '+num(q.pb,1)):''));
    if(a)info.push('公告：'+(a.title.length>34?a.title.slice(0,34)+'…':a.title)+'（'+(a.sc>0?'偏多':a.sc<0?'偏空':'中性')+'）');
    if(it.kind==='hold'&&it.cost>0&&q.price!=null){const pnl=(q.price-it.cost)/it.cost*100;info.push('持仓成本 '+num(it.cost,2)+'（'+(pnl>=0?'+':'')+num(pnl,2)+'%）');}
-   if(it.note)info.push('备注：'+(it.note.length>30?it.note.slice(0,30)+'…':it.note));
-   watch.push({kind:it.kind,code:it.code,name:name,chg:q.chg,turn:q.turn,flow:q.flow,sup:sup,res:res,tag:tag,info:info});
+   watch.push({kind:it.kind,code:it.code,name:name,chg:q.chg,price:q.price,turn:q.turn,vol:volState,flow:q.flow,sup:sup,res:res,note:it.note||'',tag:tag,info:info});
   });
   watch.sort((a,b)=>watchTagRank(a.tag)-watchTagRank(b.tag));
  }
@@ -4350,16 +4369,15 @@ function briefCompose(slot,dt,gen){
    if(res!=null&&q.price>=res*0.995)sig.push('突破压力');
    if(q.k&&q.k.bull)sig.push('均线多头');
    const tag=(q.chg!=null&&q.chg<=-3)?'风险较高':(sig.indexOf('跌破支撑')>=0||sig.indexOf('长上影')>=0)?'谨慎观察':'重点跟踪';
+   /* 同盘前：现价 / 换手 / 主力 / 支撑 / 备注 交给卡片两列区，info 只留结论性条目 */
+   const cost=+(h.avg||h.cur||0);
    const info=[];
-   info.push('今日 '+(q.chg!=null?bpc(q.chg):'—')+'（'+strength+'）');
+   if(strength&&strength!=='—')info.push('强弱：'+strength);
    if(q.amt!=null)info.push('成交额 '+bamt(q.amt));
-   if(q.turn!=null)info.push('换手 '+num(q.turn,2)+'%');
-   if(q.flow!=null)info.push('主力 '+(q.flow>=0?'净流入':'净流出')+flowTxt(Math.abs(q.flow)));
    if(sig.length)info.push('信号：'+sig.join('/'));
-   if(sup!=null&&res!=null)info.push('支撑 '+num(sup,2)+' / 压力 '+num(res,2));
-   if(h.cost>0&&q.price!=null){const pnl=(q.price-h.cost)/h.cost*100;info.push('成本 '+num(h.cost,2)+'（'+(pnl>=0?'+':'')+num(pnl,2)+'%）');}
+   if(cost>0&&q.price!=null){const pnl=(q.price-cost)/cost*100;info.push('成本 '+num(cost,2)+'（'+(pnl>=0?'+':'')+num(pnl,2)+'%）');}
    if(a)info.push('公告：'+(a.title.length>28?a.title.slice(0,28)+'…':a.title));
-   return {code:code,name:name,chg:q.chg,flow:q.flow,turn:q.turn,strength:strength,signal:sig,sup:sup,res:res,tag:tag,info:info};
+   return {code:code,name:name,chg:q.chg,price:q.price,flow:q.flow,turn:q.turn,strength:strength,signal:sig,sup:sup,res:res,note:h.note||'',tag:tag,info:info};
   }).filter(Boolean);
   holdReview.sort((a,b)=>watchTagRank(a.tag)-watchTagRank(b.tag));
  }
@@ -4582,19 +4600,93 @@ function wfBar(b,list,isEve){
    '<div class="tab'+(cur===t?' on':'')+'" onclick="wfSet(\''+esc(k)+'\',\''+t+'\')">'+
     '<span>'+esc(t)+'</span><em>'+cnt(t)+'</em></div>').join('')+'</div>';
 }
-/* 单个股卡片：沿用原字段与样式，仅标签改为归一后的三档 */
+/* ===== 个股属性区：现价 / 换手 / 主力 / 支撑 四字段 =====
+   新简报已带结构化字段（price/turn/flow/sup/res/note）；历史存档只有 info 文本行，
+   这里按前缀回填（数值用首个匹配数字），保证老简报重渲染也能撑起同一套两列布局。
+   WF_TOP 里的四类文本行已从下方要点区剔除，避免与属性区重复。 */
+const WF_TOP=['现价','换手','主力','支撑','备注'];
+function wfLine(list,p){const s=(list||[]).find(x=>String(x).indexOf(p)===0);return s==null?'':String(s).slice(p.length).replace(/^[\s:：]+/,'')}
+function wfNum(s){const m=String(s==null?'':s).match(/-?\d+(\.\d+)?/);const n=m?parseFloat(m[0]):NaN;return isNaN(n)?null:n}
+function wfVals(w){
+ const info=w.info||[];
+ let price=w.price,turn=w.turn,flow=w.flow,sup=w.sup,res=w.res,vol=w.vol;
+ let note=String(w.note||'');
+ /* 现价：老文本形如「现价 1500（-1.20%）」，先剥掉括注再取数 */
+ if(price==null)price=wfNum(wfLine(info,'现价').replace(/（[^）]*）/g,''));
+ /* 换手：附带量能状态（放量 / 缩量 / 温和） */
+ if(turn==null)turn=wfNum(wfLine(info,'换手'));
+ if(!vol){const vm=wfLine(info,'换手').match(/（([^）]*)）/);if(vm)vol=vm[1];}
+ /* 主力：结构化值为资金净额（元），老文本形如「主力 净流入1.2亿」 */
+ let flowTxtV='—',flowCls='var(--ink2)';
+ if(flow!=null&&flow!==''&&!isNaN(+flow)){flowTxtV=flowTxt(+flow);flowCls=(+flow)>0?'var(--red)':(+flow)<0?'var(--green)':'var(--ink2)'}
+ else{const s=wfLine(info,'主力'),mv=s.match(/-?\d+(\.\d+)?\s*[亿万]?/);
+  if(mv){const neg=/流出/.test(s);flowTxtV=(/^-/.test(mv[0])?'-':(neg?'-':'+'))+mv[0].replace(/^[-+]|\s/g,'');flowCls=neg?'var(--green)':'var(--red)'}}
+ /* 支撑：附带压力（若给出） */
+ if(sup==null){const ms=wfLine(info,'支撑').match(/-?\d+(\.\d+)?/g)||[];sup=ms.length?parseFloat(ms[0]):null;if(res==null&&ms[1])res=parseFloat(ms[1]);}
+ if(!note)note=wfLine(info,'备注');
+ const rest=info.filter(s=>!WF_TOP.some(p=>String(s).indexOf(p)===0));
+ return {price:(price!=null&&!isNaN(price))?('¥'+num(price,2)):'—',
+  turn:(turn!=null&&!isNaN(turn))?(num(turn,2)+'%'):'—',vol:vol||'',
+  flow:flowTxtV,flowCls:flowCls,
+  sup:(sup!=null&&!isNaN(sup))?('¥'+num(sup,2)):'—',
+  res:(res!=null&&!isNaN(res))?('压 ¥'+num(res,2)):'',
+  note:note,rest:rest};
+}
+function wfCell(lbl,val,cls,extra){
+ return '<div class="wcell">'+(lbl?'<i>'+esc(lbl)+'</i>':'')+'<b'+(cls?(' style="color:'+cls+'"'):'')+'>'+esc(val)+'</b>'+
+   (extra?'<s>'+esc(extra)+'</s>':'')+'</div>';
+}
+/* ===== 次级信息区：同样两列 =====
+   左侧放估值 / 强弱 / 成本 / 成交额（PE 与 PB 合并成同一行的「PE/PB 21.4 / 7.1」），
+   右侧放公告与信号。未知前缀的行默认归左列，保证任何简报都不会漏项。 */
+const WF_ROW=[['成交额','成交额'],['信号','信号'],['公告','公告'],['持仓成本','持仓成本'],['成本','成本'],['强弱','强弱'],['PE','PE']];
+const WF_SIDE_R=['信号'];
+const WF_LAST=['公告'];                                            // 独立成行、跨两列、永远排在最后
+function wfSubRows(w){
+ const rows=wfVals(w).rest.map(t=>{
+  const s=String(t);
+  if(/^PE\b/.test(s)){const ns=s.match(/\d+(\.\d+)?/g)||[];return {l:'PE/PB',v:ns.length?ns.slice(0,2).join(' / '):s.slice(2).trim(),side:'l'}}
+  const hit=WF_ROW.find(r=>s.indexOf(r[0])===0);
+  if(!hit)return {l:'',v:s,side:'l'};
+  const side=WF_LAST.indexOf(hit[0])>=0?'ann':(WF_SIDE_R.indexOf(hit[0])>=0?'r':'l');
+  return {l:hit[1],v:s.slice(hit[0].length).replace(/^[\s:：]+/,''),side:side};
+ });
+ return {left:rows.filter(r=>r.side==='l'),right:rows.filter(r=>r.side==='r'),ann:rows.filter(r=>r.side==='ann')};
+}
+function wfSubHtml(w){
+ const s=wfSubRows(w);
+ const two=s.left.length+s.right.length;
+ if(!two&&!s.ann.length)return '';
+ let h='<div class="wgrid wrest">';
+ if(two){                                                          // 其余内容两列排布
+  const span=s.left.length&&s.right.length?'':' class="wfull"';    // 只有一侧时占满整行，不留半边空白
+  if(s.left.length)h+='<div'+span+'>'+s.left.map(r=>wfCell(r.l,r.v)).join('')+'</div>';
+  if(s.right.length)h+='<div'+span+'>'+s.right.map(r=>wfCell(r.l,r.v)).join('')+'</div>';
+ }
+ if(s.ann.length)h+=s.ann.map(r=>'<div class="wann">'+wfCell(r.l,r.v)+'</div>').join('');  // 公告：跨界成一整行
+ return h+'</div>';
+}
+/* 单个股卡片：名称代码 → 涨跌幅 + 备注（右对齐一路）→ 四字段两列 → 次级信息两列 */
 function wfItem(w,showHold){
+ const v=wfVals(w);
  const chgCls=w.chg==null?'var(--ink2)':w.chg>0?'var(--red)':w.chg<0?'var(--green)':'var(--ink2)';
  const tag=watchTagOf(w.tag);
- return '<div style="border:1px solid var(--line);border-radius:9px;padding:7px 9px">'+
-  '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">'+
-   '<b style="font-size:13px">'+esc(w.name)+'</b>'+
-   '<span style="font-size:11px;color:var(--ink3)">'+esc(w.code)+'</span>'+
+ return '<div class="wcard">'+
+  '<div class="whead">'+
+   '<b class="nm">'+esc(w.name)+'</b>'+
+   '<span class="cd">'+esc(w.code)+'</span>'+
    (showHold&&w.kind==='hold'?'<span class="tag b" style="font-size:10px;padding:1px 5px">持仓</span>':'')+
    '<span class="tag '+BE_TAG(w.tag)+'" style="font-size:10px;padding:1px 6px">'+esc(tag)+'</span>'+
-   '<span style="font-size:11.5px;color:'+chgCls+'">'+bpc(w.chg)+'</span>'+
+   '<span class="wend">'+
+    '<span class="wchg" style="color:'+chgCls+'">'+bpc(w.chg)+'</span>'+
+    (v.note?'<span class="wnote" title="'+esc(v.note)+'">'+esc(v.note)+'</span>':'')+
+   '</span>'+
   '</div>'+
-  '<div style="font-size:11.5px;color:var(--ink2);line-height:1.7">'+((w.info||[]).map(i=>'· '+esc(i)).join('<br>'))+'</div>'+
+  '<div class="wgrid">'+
+   '<div>'+wfCell('现价',v.price)+wfCell('换手',v.turn,null,v.vol)+'</div>'+
+   '<div>'+wfCell('主力',v.flow,v.flowCls)+wfCell('支撑',v.sup,null,v.res)+'</div>'+
+  '</div>'+
+  wfSubHtml(w)+
  '</div>';
 }
 /* 模块外壳：标题 + 筛选条 + 按选中标签渲染（空档位给出空状态提示） */
