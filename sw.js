@@ -2,7 +2,13 @@
  * App shell caching. Network-first for navigation (cloud sync + live quotes
  * need fresh data), cache-first for static assets with offline fallback.
  */
-const CACHE = 'monchichi-v2';
+/* ⚠️ 缓存名必须与 index.html 里的 `const BUILD` 保持一致。
+ * 原因：早先这里写死 'monchichi-v2' 从不变化，浏览器会把某次「会话中间态」的
+ * index.html 缓存下来，造成「代码明明改了、页面还是旧的」，排查时极易误判为
+ * 「改动没生效」或「接口坏了」。缓存名随构建号变化后，每次发布 = 新缓存 =
+ * 旧缓存自动清空，从根上杜绝该问题。
+ * 改 index.html 的 BUILD 时，这里必须同步改；_dev/_smoke.js 有门禁断言两者一致。 */
+const CACHE = 'monchichi-2026-09-15.4';
 const ASSETS = [
   './',
   './index.html',

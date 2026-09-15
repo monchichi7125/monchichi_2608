@@ -2305,19 +2305,50 @@ async function quoteFetch(silent){
  });
 }
 /* ===== 自选股分析：资金流向 + K线形态 + 操作建议 ===== */
-function jsonpGet(url,to){
+/* ===== 东财请求闸门（防同 IP 高频洪泛被限流）=====
+   背景：一次简报刷新会打出 40+ 个 JSONP 请求（指数 / 板块 / 涨停 / 公告 / 个股行情 / K 线 / 板块成分股），
+   瞬时并发过高会被东方财富按 IP 限流（连接被重置 socket hang up / ECONNRESET 或长时间无响应），
+   此后同 IP 的请求会连续失败，表现就是「简报数据抓取失败（接口限流/离线）」。
+   对策：① 全局限制「同时在飞」的请求数 ② 每次放行留间隔 ③ 网络层失败按指数退避重试。 */
+const EM_GATE={max:4,run:0,q:[],gap:70};
+function emGateNext(){
+  if(EM_GATE.run>=EM_GATE.max||!EM_GATE.q.length)return;
+  EM_GATE.run++;const job=EM_GATE.q.shift();job();
+}
+function emGateEnter(){return new Promise(res=>{EM_GATE.q.push(res);emGateNext();});}
+function emGateLeave(){EM_GATE.run=Math.max(0,EM_GATE.run-1);setTimeout(emGateNext,EM_GATE.gap);}
+function emSleep(ms){return new Promise(r=>setTimeout(r,ms));}
+/* 单次 JSONP（不加闸门、不重试）：失败原因标记 e.net=true 表示网络层错误（值得重试） */
+function jsonpOnce(url,to){
  return new Promise((resolve,reject)=>{
   if(typeof document==='undefined'){reject(new Error('no DOM'));return}
   const cb='em_j_'+Date.now()+'_'+Math.floor(Math.random()*1e4);
   const sc=document.createElement('script');let done=false;
   const clean=()=>{try{delete window[cb]}catch(e){}try{if(sc.parentNode)sc.parentNode.removeChild(sc)}catch(e){}};
   const ok=j=>{if(done)return;done=true;clean();resolve(j)};
-  const fail=()=>{if(done)return;done=true;clean();reject(new Error('jsonp fail'))};
-  window[cb]=ok;sc.onerror=fail;
+  const fail=net=>{if(done)return;done=true;clean();const e=new Error(net?'jsonp net fail':'jsonp fail');e.net=!!net;reject(e)};
+  window[cb]=ok;sc.onerror=()=>fail(true);
   sc.src=url+(url.indexOf('cb=')>=0?'':'&cb='+cb)+'&_='+Date.now();
   (document.head||document.body).appendChild(sc);
-  setTimeout(fail,(to||9000));
+  setTimeout(()=>fail(false),(to||9000));
  });
+}
+/* 带闸门 + 退避重试的 JSONP：所有东财请求统一走这里（签名与旧版兼容）
+   仅对「网络层失败」重试（限流多为此类）；超时不重试，避免拖慢。 */
+async function jsonpGet(url,to,tries){
+ const n=(tries==null?1:tries);
+ for(let i=0;;i++){
+  await emGateEnter();
+  try{
+   const j=await jsonpOnce(url,to);
+   emGateLeave();
+   return j;
+  }catch(e){
+   emGateLeave();
+   if(i>=n||!e||!e.net)throw e;
+   await emSleep(420*(i+1)+Math.floor(Math.random()*220));   // 退避：越试越久，避开限流窗口
+  }
+ }
 }
 async function klineEnrich(){
  const jobs=D.invest.stocks.map(s=>{
@@ -3712,6 +3743,11 @@ async function briefSyncArch(){
 }
 /* ===== 简报引擎：纯手动触发 —— 点页面上「生成/更新」按钮即时拉取数据并原位改写当日简报；无任何自动定时任务 ===== */
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
+/* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
+   ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
+const BUILD='2026-09-15.4';
+/* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
+let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
 const GLOB_IDX=[['100.DJIA','道琼斯'],['100.SPX','标普500'],['100.NDX','纳斯达克'],['100.HSI','恒生指数']];
 // 盘前增量指标：富时 A50 期指（新加坡） / 离岸人民币 USDCNH
@@ -3719,10 +3755,187 @@ const GLOB_IDX=[['100.DJIA','道琼斯'],['100.SPX','标普500'],['100.NDX','纳
 const MORN_IDX_EXTRA=[['133.USDCNH','离岸人民币']];
 const nv=v=>(v==null||v===''||v==='-')?null:(isNaN(+v)?null:+v);
 function briefSlotNow(h){return (h==null?new Date().getHours():h)>=15?'evening':'morning';}
+/* ===== 备用行情源：腾讯 qt.gtimg.cn（东财被限流时的「指数级」兜底）=====
+   为什么需要：东财按 IP 限流较敏感——一次简报刷新会打出 40+ 请求，一旦触发限流，
+   指数 / 板块 / 环球三路同时返回空，简报就整体生成失败（「简报数据抓取失败（接口限流/离线）」）。
+   腾讯为独立 CDN、不受东财限流影响，且返回格式统一（~ 分隔），故作为指数与环球行情的兜底。
+   注意：腾讯不是回调式 JSONP，而是给固定全局变量 v_<code> 赋值，故须「加载脚本 → 读全局变量」取数。 */
+const TX_SEC={'1.000001':'sh000001','0.399001':'sz399001','0.399006':'sz399006','1.000300':'sh000300',
+ '1.000688':'sh000688','0.399106':'sz399106','1.000016':'sh000016','0.399005':'sz399005',
+ '100.DJIA':'usDJI','100.SPX':'usINX','100.NDX':'usIXIC','100.NDX100':'usNDX','100.HSI':'hkHSI','100.HSCEI':'hkHSCEI'};
+function txSecid(sid){return TX_SEC[sid]||null;}
+/* 取腾讯行情 → 返回 { 'sh000001': '1~上证指数~...' } 形式的原始串
+   ① 优先 fetch 直读：qt.gtimg.cn 实测返回 `Access-Control-Allow-Origin:*`，且响应体本身就是
+      `v_<code>="..."` 赋值文本，fetch 拿到文本自行解析即可（实测 len=463，稳定可用）。
+   ② fetch 不可用时退回「脚本注入 + 读全局变量」（原实现）。
+   两条路互为兜底的原因：脚本注入依赖第三方 <script> 能被浏览器加载，会被广告拦截插件 /
+   严格跟踪防护直接拦掉，而 fetch 走 CORS 不受该策略影响——只留脚本一条路曾在真实浏览器上整链路失败。 */
+function txVarRe(c){return new RegExp('v_'+String(c).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'="([^"]*)"');}
+/* ⚠ 腾讯响应是 GBK 编码（响应头 `Content-Type: text/html; charset=GBK`），而 fetch 的 `Response.text()`
+   按 WHATWG 规范**恒按 UTF-8 解码**（不看响应头 charset）→ 中文名会变成一串替换字符 U+FFFD，例如
+   「宁德时代」→「����」，实测表现为简报「自选股 / 持仓体检」名称栏乱码。
+   注：早期走「脚本注入」时浏览器会按响应头的 GBK 正确解码，故这个乱码是在改成 fetch 优先后才暴露的。
+   对策：取 arrayBuffer 后按响应头 charset 显式解码；解码结果若仍含 U+FFFD 则换另一种编码再试，
+   取「无替换字符」的那个（含响应头缺失的兜底）。TextDecoder 不可用时退回 text()，
+   再由 txCleanName 丢弃乱码名——宁可显示代码，也绝不把乱码展示给用户。 */
+/* 同步解码（纯函数，便于单测）：按 content-type 里的 charset 决定解码顺序，
+   依次尝试并返回「不含替换字符 U+FFFD」的那个结果；全都脏则返回首个结果兜底。 */
+function txDecodeBuf(buf,ct){
+ if(!buf||!buf.byteLength||typeof TextDecoder==='undefined')return null;
+ const encs=/gbk|gb2312|gb18030/i.test(String(ct||''))?['gbk','gb18030','utf-8']:['utf-8','gbk','gb18030'];
+ let first=null;
+ for(let i=0;i<encs.length;i++){
+  let s=null;try{s=new TextDecoder(encs[i]).decode(buf)}catch(e){continue}
+  if(s.indexOf('\uFFFD')<0)return s;          // 解码干净 → 直接用
+  if(first==null)first=s;                     // 记录首个结果作最终兜底
+ }
+ return first;
+}
+async function txReadText(r){
+ let ct='';
+ try{ct=(r&&r.headers&&typeof r.headers.get==='function')?String(r.headers.get('content-type')||''):'';}catch(e){}
+ let buf=null;
+ try{buf=(r&&typeof r.arrayBuffer==='function')?await r.arrayBuffer():null;}catch(e){}
+ const s=buf?txDecodeBuf(buf,ct):null;
+ if(s!=null)return s;
+ try{return (r&&typeof r.text==='function')?await r.text():'';}catch(e){return '';}
+}
+/* 名称清洗（纯函数）：任何来源的股票名只要含替换字符 U+FFFD，就说明解码失败 →
+   去掉替换字符；若结果为空白则返回空串，交由上层退回「用户自填名 / 股票代码」，避免把乱码显示出去。 */
+function txCleanName(n){
+ const s=String(n==null?'':n).replace(/\uFFFD+/g,'').trim();
+ return /[\u4e00-\u9fa5A-Za-z0-9]/.test(s)?s:'';
+}
+async function txFetch(codes,to){
+ const list=(codes||[]).filter(Boolean);
+ if(!list.length)throw new Error('tx no codes');
+ try{
+  const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),to||8000);
+  let txt=null;
+  try{const r=await fetch('https://qt.gtimg.cn/q='+list.join(','),{signal:ctrl.signal,cache:'no-store'});if(r.ok)txt=await txReadText(r);}
+  finally{clearTimeout(t)}
+  if(txt){
+   const out={};
+   list.forEach(c=>{const m=txt.match(txVarRe(c));if(m&&m[1])out[c]=m[1];});
+   if(Object.keys(out).length){TX_LAST_ERR='';return out;}
+   TX_LAST_ERR='fetch 响应无可解析变量';
+  }else TX_LAST_ERR='fetch 未取到响应体';
+ }catch(e){TX_LAST_ERR='fetch '+(e&&e.message||'失败');}
+ return txFetchScript(list,to);
+}
+/* 脚本注入兜底：腾讯不是回调式 JSONP，而是给全局变量 v_<code> 赋值，故「加载脚本 → 读全局变量」；
+   用完即删变量，避免下次读到过期值 */
+function txFetchScript(codes,to){
+ return new Promise((resolve,reject)=>{
+  if(typeof document==='undefined'){TX_LAST_ERR='无 DOM，脚本注入不可用';reject(new Error('no DOM'));return}
+  if(!codes||!codes.length){reject(new Error('tx no codes'));return}
+  const sc=document.createElement('script');let done=false;
+  const clean=()=>{try{if(sc.parentNode)sc.parentNode.removeChild(sc)}catch(e){}};
+  const fin=err=>{
+   if(done)return;done=true;
+   if(err){clean();TX_LAST_ERR='脚本注入 '+(err.message||'失败');reject(err);return}
+   const out={};
+   codes.forEach(c=>{const v=window['v_'+c];if(typeof v==='string'&&v)out[c]=v;try{delete window['v_'+c]}catch(e){}});
+   clean();
+   if(!Object.keys(out).length){TX_LAST_ERR='脚本注入未读到全局变量';reject(new Error('tx empty'));return}
+   TX_LAST_ERR='';resolve(out);
+  };
+  sc.onload=()=>fin(null);
+  sc.onerror=()=>fin(new Error('tx net fail'));
+  sc.src='https://qt.gtimg.cn/q='+codes.join(',');
+  (document.head||document.body).appendChild(sc);
+  setTimeout(()=>fin(new Error('tx timeout')),(to||8000));
+ });
+}
+/* 解析腾讯 ~ 分隔字段。坑：时间戳在 A 股 / 港股 / 美股之间「格式与下标都不一致」——
+   A 股是 14 位紧凑 `20260915104724`（下标 30），港股 `2026/09/15 10:32:51`（下标 30），
+   美股 `2026-09-14 16:34:53`（下标 31）。故先扫描定位时间戳再顺推涨跌与高低；
+   14 位分支带年月日合法性校验，避免把成交额 / 市值这类长数字误判成时间戳。 */
+function txIsTs(v){return /^(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{6}$/.test(v)||/^(19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}[ T]\d{1,2}:\d{2}/.test(v);}
+function txParse(raw){
+ const a=String(raw||'').split('~');
+ if(a.length<10)return null;
+ const px=nv(a[3]);if(px==null)return null;
+ let ti=-1;
+ for(let i=5;i<a.length;i++){if(txIsTs(String(a[i]||''))){ti=i;break}}
+ return {name:txCleanName(a[1]),code:String(a[2]||''),price:px,preClose:nv(a[4]),open:nv(a[5]),
+  ts:ti>=0?String(a[ti]||''):'',chg:ti>=0?nv(a[ti+1]):null,chgPct:ti>=0?nv(a[ti+2]):null,
+  high:ti>=0?nv(a[ti+3]):null,low:ti>=0?nv(a[ti+4]):null};
+}
+/* 兜底版指数抓取：返回结构对齐 briefFetchIdx（name/price/chg/amt/up/down），便于上层无感切换 */
+async function briefFetchIdxTx(secids){
+ const pairs=(secids||[]).map(([sid,nm])=>[txSecid(sid),nm]).filter(p=>!!p[0]);
+ if(!pairs.length)return null;
+ const raw=await txFetch(pairs.map(p=>p[0]),8000);
+ const arr=pairs.map(([c,nm])=>{
+  const q=txParse(raw[c]);
+  if(!q)return {name:nm,price:null,chg:null,amt:null,up:null,down:null,src:'tx'};
+  return {name:nm,price:q.price,chg:(q.chgPct!=null?q.chgPct:q.chg),amt:null,up:null,down:null,src:'tx'};
+ });
+ return arr.some(x=>x.price!=null)?arr:null;   // 全无价格视为失败，交回上层
+}
+/* 个股代码 → 腾讯代码（sh/sz/bj）。与 secid() 的沪深判定保持一致，另补北交所 bj 分支。 */
+function txCode(c){
+ const raw=String(c||'').trim().toUpperCase();
+ const m=raw.match(/^(SH|SZ|BJ)/);
+ const body=raw.replace(/^(SH|SZ|BJ)/,'');
+ if(!/^\d{6}$/.test(body))return null;
+ if(m)return m[1].toLowerCase()+body;
+ if(/^(4|8)/.test(body))return 'bj'+body;
+ if(/^(6|5|9|11|13|18|20)/.test(body))return 'sh'+body;
+ return 'sz'+body;
+}
+/* 个股专用解析：腾讯对个股额外给出换手 / PE / PB / 总市值（单位亿）等。
+   ⚠ 这些下标只对「个股」成立，指数在同一位置上放的是别的数据，故不可混用。 */
+function txParseStock(raw){
+ const base=txParse(raw);if(!base)return null;
+ const a=String(raw).split('~');
+ base.turn=nv(a[38]);                                   // 换手率 %
+ base.pe=nv(a[39]);                                     // 市盈率 TTM
+ base.amtWan=nv(a[37]);                                 // 成交额（万元）
+ base.mcapYi=nv(a[45]);                                 // 总市值（亿元）
+ base.pb=nv(a[46]);                                     // 市净率
+ return base;
+}
+/* 个股行情兜底（腾讯）：主力净流入腾讯无对应字段，留空由上层降级展示 */
+async function txQuotes(codes){
+ const pairs=(codes||[]).map(c=>[c,txCode(c)]).filter(p=>!!p[1]);
+ if(!pairs.length)return null;
+ const raw=await txFetch(pairs.map(p=>p[1]),9000);
+ const out={};
+ pairs.forEach(([orig,tc])=>{
+  const q=txParseStock(raw[tc]);if(!q||q.price==null)return;
+  out[String(orig).replace(/^(SH|SZ|BJ)/i,'')]={name:q.name,price:q.price,
+   chg:(q.chgPct!=null?q.chgPct:q.chg),flow:null,
+   amt:(q.amtWan!=null?q.amtWan*1e4:null),turn:q.turn,
+   mcap:(q.mcapYi!=null?q.mcapYi*1e8:null),pe:q.pe,pb:q.pb,
+   high:q.high,low:q.low,preClose:q.preClose,src:'tx'};
+ });
+ return Object.keys(out).length?out:null;
+}
+/* 腾讯 K 线兜底：web.ifzq.gtimg.cn（带 CORS *，可直接 fetch）→ 转成 computeKline 需要的逗号行格式。
+   腾讯每行是 [日期,开,收,高,低,量]，与东财前 6 位顺序一致；成交额东财才有，补 0 占位（上层不依赖它）。 */
+async function txKline(code,n){
+ const c=txCode(code);if(!c)return null;
+ const url='https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param='+c+',day,,,'+(n||60)+',qfq';
+ let j=null;
+ const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),8000);
+ try{const r=await fetch(url,{signal:ctrl.signal,cache:'no-store'});if(r.ok)j=await r.json();}
+ catch(e){j=null}
+ finally{clearTimeout(t);}
+ const node=j&&j.data&&j.data[c];
+ const rows=(node&&(node.qfqday||node.day))||null;
+ if(!rows||!rows.length)return null;
+ return rows.map(r=>[r[0],r[1],r[2],r[3],r[4],r[5],'0'].join(','));
+}
 async function briefFetchIdx(secids){
  const url='https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&np=1&secids='+secids.map(x=>x[0]).join(',')+'&fields=f2,f3,f6,f12,f14,f104,f105,f106&ut='+EM_UT;
- const j=await jsonpGet(url,8000);
- const d=j&&j.data&&j.data.diff;if(!d)return null;
+ const j=await jsonpGet(url,8000).catch(()=>null);
+ const d=j&&j.data&&j.data.diff;
+ if(!d){                                  // 东财被限流 / 不可用 → 自动切腾讯兜底，保证简报不整体失败
+  const fb=await briefFetchIdxTx(secids).catch(e=>{if(!TX_LAST_ERR)TX_LAST_ERR=(e&&e.message)||'兜底异常';return null;});
+  return fb;
+ }
  const arr=Array.isArray(d)?d:Object.values(d);
  return secids.map(([sid,nm])=>{const it=arr.find(x=>String(x.f12)===sid.split('.')[1])||{};
   return {name:nm,price:nv(it.f2),chg:nv(it.f3),amt:nv(it.f6),up:nv(it.f104),down:nv(it.f105)};});
@@ -3738,7 +3951,9 @@ async function briefFetchZT(){
  const d=new Date(),ds=d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');
  const url='https://push2ex.eastmoney.com/getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=320&sort=fbt%3Aasc&date='+ds;
  const j=await jsonpGet(url,8000);
- const info=j&&j.data&&j.data.info;if(!info||!info.length)return null;
+ // ⚠ 字段漂移：东财该接口的列表字段已由 data.info 更名为 data.pool（实测 2026-09 起返回 pool），
+ // 只读 info 会永远拿不到数据、连板梯队整栏失效，故两者都兼容。
+ const d0=j&&j.data;const info=(d0&&(d0.pool||d0.info))||null;if(!info||!info.length)return null;
  const lbs=info.map(x=>nv(x.lbc)||1);
  // 兼容展示：今日涨停池 / 炸板数 / 最高连板 / 昨日涨停今日表现 — 简报只取 3 个核心字段；高阶可后续拓展连板梯队接口
  return {count:info.length,maxLb:Math.max.apply(null,lbs),zb:info.filter(x=>(nv(x.zbc)||0)>0).length};
@@ -3774,7 +3989,77 @@ async function briefFetchFutures(){
   const d=j&&j.data&&j.data.diff;if(!d)return null;
   const arr=Array.isArray(d)?d:Object.values(d);
   return arr.map(x=>({code:String(x.f12||''),name:String(x.f14||''),price:nv(x.f2),chg:nv(x.f3)})).filter(x=>x.name);
- }catch(e){return null;}
+  }catch(e){return null;}
+}
+/* 本地数据修复：清掉历史写入的乱码名（U+FFFD）。
+   来源——早期腾讯兜底用 fetch 的 Response.text() 解码 GBK 响应，中文名变乱码；若已被写进
+   localStorage 就会永久残留（即使代码已修）。这里在启动时就地修掉，之后由行情接口（东财 f14）自然回填。
+   注意：本块在 mod-invest 内执行时 load() 已完成，故可直接改 D。 */
+function fixMojibakeNames(){
+ let n=0;
+ const clean=o=>{if(o&&typeof o.name==='string'&&o.name.indexOf('\uFFFD')>=0){o.name=o.name.replace(/\uFFFD+/g,'').trim();n++}};
+ const inv=D.invest||{};
+ (inv.stocks||[]).forEach(clean);(inv.holds||[]).forEach(clean);
+ if(n)save(true);
+ return n;
+}
+fixMojibakeNames();
+// 自选股 / 持仓 个股行情（供简报「盘前体检 / 盘后复盘」表格）：价格、涨跌幅、换手、主力净流入、市值/PE/PB，并用 K 线接口算近 20 日支撑(low20)/压力(high20)/量比/均线/当日上下影
+async function briefFetchQuotes(){
+ try{
+  const stk=(D.invest&&D.invest.stocks)||[],hold=(D.invest&&D.invest.holds)||[];
+  const codes=Array.from(new Set([].concat(stk.map(s=>s.code),hold.map(h=>h.code)).filter(Boolean)));
+  if(!codes.length)return {};
+  const url='https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&np=1&secids='+codes.map(secid).join(',')+'&fields=f2,f3,f12,f14,f62,f6,f8,f60,f116,f117,f15,f16,f18&ut='+EM_UT;
+  const j=await jsonpGet(url,9000).catch(()=>null);
+  const d=j&&j.data&&j.data.diff;
+  const arr=d?(Array.isArray(d)?d:Object.values(d)):[];
+  const map={};
+  arr.forEach(x=>{const code=String(x.f12||'');if(!code)return;
+   const o={name:String(x.f14||''),price:nv(x.f2),chg:nv(x.f3),flow:nv(x.f62),amt:nv(x.f6),turn:nv(x.f8),mcap:nv(x.f60),pe:nv(x.f116),pb:nv(x.f117),high:nv(x.f15),low:nv(x.f16),preClose:nv(x.f18)};
+   if(x.f6&&x.f6!=='-'&&+x.f6&&x.f62!=null)o.flowRatio=(+x.f62)/(+x.f6)*100;
+   map[code]=o;});
+  if(!arr.length){                       // 东财受限 → 腾讯兜底补个股行情（主力净流入缺失，体检/复盘按缺省降级展示）
+   const txm=await txQuotes(codes).catch(()=>null);
+   if(txm){
+    // 腾讯名若解码失败会被 txCleanName 清空 → 用用户自填名回填，保证体检表标题不是「(空)」或乱码
+    const lname={};
+    stk.forEach(s=>{if(s&&s.code&&s.name)lname[String(s.code).replace(/^(SH|SZ|BJ)/i,'')]=s.name;});
+    hold.forEach(h=>{if(h&&h.code&&h.name)lname[String(h.code).replace(/^(SH|SZ|BJ)/i,'')]=h.name;});
+    Object.keys(txm).forEach(k=>{const o=txm[k];if(o&&!o.name)o.name=lname[k]||'';map[k]=o;});
+   }
+  }
+  // 近 20 日 K 线：支撑 / 压力 / 量比 / 均线 / 当日上下影
+  // ⚠ 必须分批串行 + 走缓存：早期实现用 Promise.all 对全部自选股/持仓一次性并发拉取
+  // （例如 20 只 = 20 个请求同时发出），叠加页面加载时的 klineEnrich，会直接触发东财按 IP 限流，
+  // 使同一轮简报的第一组请求也全部失败 → 表现为「简报数据抓取失败（接口限流/离线）」。切勿改回全并发。
+  const normC=c=>String(c).replace(/^(SH|SZ|BJ)/i,'');
+  const KC=(D.invest.klineCache=D.invest.klineCache||{});
+  const kFresh=c=>{const it=KC[normC(c)];return (it&&Date.now()-(it.ts||0)<5*60*1000)?it.k:null;};
+  const need=codes.filter(c=>!kFresh(c));
+  const kl=[];
+  for(let i=0;i<need.length;i+=3){                      // 每批 3 只，批间留 200ms
+   const batch=need.slice(i,i+3);
+   const r=await Promise.all(batch.map(c=>{
+    const kurl='https://push2his.eastmoney.com/api/qt/stock/kline/get?secid='+secid(c)+'&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=60';
+    const buildK=lines=>{                       // 东财 / 腾讯 两种来源统一收敛成同一个 k 结构
+     if(!lines||!lines.length)return null;
+     const k=computeKline(lines);if(!k)return null;
+     const last=k.arr[k.arr.length-1];
+     return {code:normC(c),k:{low20:k.low20,high20:k.high20,volRatio:k.volRatio,m5:k.m5,m20:k.m20,m60:k.m60,bull:k.bull,above20:k.above20,above60:k.above60,trend5:k.trend5,trend20:k.trend20,last:{o:last.o,h:last.h,l:last.l,c:last.c}}};
+    };
+    return jsonpGet(kurl,8000)
+     .then(kj=>{const lines=kj&&kj.data&&kj.data.klines;return (lines&&lines.length)?buildK(lines):null;})
+     .catch(()=>null)
+     .then(r0=>r0||txKline(c,60).then(tl=>buildK(tl)).catch(()=>null));   // 东财受限 → 腾讯 K 线兜底
+   }));
+   r.forEach(o=>{if(o&&o.k){KC[o.code]={k:o.k,ts:Date.now()};kl.push(o);}});
+   if(i+3<need.length)await emSleep(200);
+  }
+  codes.forEach(c=>{const code=normC(c),cached=kFresh(c);if(cached&&map[code])map[code].k=cached;});   // 缓存回填
+  kl.forEach(o=>{if(o&&o.k&&map[o.code])map[o.code].k=o.k;});
+  return map;
+ }catch(e){return {};}
 }
 /* ===== 个股公告精选：东方财富公告接口（JSONP），沪深主板优先，按「利好 / 利空」关键词加权筛选 ===== */
 const ANN_API='https://np-anotice-stock.eastmoney.com/api/security/ann';
@@ -3796,10 +4081,20 @@ function annSort(a,b){
  return String(b.date).localeCompare(String(a.date));
 }
 /* 纯函数：原始公告数组 → 精选列表（剔除例行 / 仅沪深主板 / 三级分桶），便于单测 */
+/* 从公告 codes 数组中挑出「真实个股」代码：
+   东财会把同一条公告的成分指数（ann_type='Index'）和可转债（'KZZ,Bond'）与个股混排，且顺序不定——
+   如信诺维 codes=[000001/000300/000852/399001(Index), 688837(A)]，取 codes[0] 会误显示成「信诺维(000001)」；
+   翔丰华 codes=[123225 翔丰转债(KZZ,Bond), 300890(A)]，取 codes[0] 会拿到转债代码。
+   按 ann_type 判定优于硬编码指数黑名单：000001 既是上证指数也是平安银行真实代码，黑名单会误杀后者。 */
+function annMainCode(cs){
+  if(!cs||!cs.length)return null;
+  for(let i=0;i<cs.length;i++){if(/(^|,)A(,|$)/.test(String((cs[i]||{}).ann_type||'')))return cs[i];}
+  return cs[0];                                                    // 无 A 股标记时退回首个，保持旧行为
+}
 function annPick(arr){
  const seen=new Set(),out=[],noise=[];
  (arr||[]).forEach(it=>{
-  const cs=it.codes||[],c0=cs[0]||{};
+  const cs=it.codes||[],c0=annMainCode(cs)||{};
   const code=String(c0.stock_code||'');
   if(!/^(600|601|603|605|000|001|002|003)/.test(code))return;   // 仅沪深主板（剔除科创 / 创业 / 北交 / 未上市）
   const nm=String(c0.short_name||'').replace(/\s+/g,'');
@@ -3854,7 +4149,7 @@ function briefCompose(slot,dt,gen){
  const date=gen.getFullYear()+'-'+pad2(gen.getMonth()+1)+'-'+pad2(gen.getDate());
  const time=pad2(gen.getHours())+':'+pad2(gen.getMinutes());
  const id='b'+date.replace(/-/g,'')+(isEve?'-pm':'-am');
- const idx=dt.idx||[],boards=dt.boards||[],glob=dt.glob||[],zt=dt.zt||null,north=dt.north||null,lhb=dt.lhb||null,futs=dt.futs||null,extraIdx=dt.extraIdx||null,ann=dt.ann||[];
+ const idx=dt.idx||[],boards=dt.boards||[],glob=dt.glob||[],zt=dt.zt||null,north=dt.north||null,lhb=dt.lhb||null,futs=dt.futs||null,extraIdx=dt.extraIdx||null,ann=dt.ann||[],stkQ=dt.stkQ||{};
  const AN=annBlock(ann,10);
  const sh=idx.find(x=>x.name==='上证指数')||{},sz=idx.find(x=>x.name==='深证综指')||{};
  const disp=idx.filter(x=>['上证指数','深证成指','创业板指','沪深300'].indexOf(x.name)>=0);
@@ -3918,11 +4213,14 @@ function briefCompose(slot,dt,gen){
    (up||down?('全市场上涨 '+up+' 家、下跌 '+down+' 家，'):'')+
    '赚钱效应'+(up>down*1.5?'偏强':(down>up*1.5?'偏弱':'均衡'))+'。'+
    '② K 线形态：上证 '+(sh.chg>0.5?'放量长阳':sh.chg<-0.5?'放量长阴':Math.abs(sh.chg||0)<0.2?'缩量十字星':'小阳 / 小阴')+'，需结合次日开盘验证趋势延续性。'+
-   '③ 成交连续性：成交额较前一交易日'+((twoAmt!=null)?(twoAmt>8e11?'放量水平':'正常水平'):'暂无数据')+'；连续几天对比看是否突破近期均量。';
+   '③ 成交连续性：成交额较前一交易日'+((twoAmt!=null)?(twoAmt>8e11?'放量水平':'正常水平'):'暂无数据')+'；连续几天对比看是否突破近期均量。'+
+   '④ 市场情绪：'+(up>down*1.3?'亢奋偏热、警惕高位分歧与次日兑现':down>up*1.3?'恐慌偏弱、关注超跌修复机会':'中性均衡')+'，连板高度 '+(zt?zt.maxLb:'—')+' 反映短线风险偏好位置。';
   sections.themes='① 今日领涨板块：'+(topB.length?topB.map(bline).join('；'):'暂无')+'。'+
    '① 今日领跌板块：'+(botB.length?botB.map(bline).join('；'):'暂无')+'。'+
    '② 主线判断：是否有「总龙头→板块龙头→低位补涨」完整梯队？'+(chgUpB.length?('目前 '+chgUpB.slice(0,3).map(b=>b.name).join('、')+' 形成连续梯队'):'梯队不明显，多为一日游热点')+'。'+
-   '③ 涨停股集中方向：'+(zt?'参考板块资金净流入前列（'+inB.slice(0,3).map(b=>b.name).join('、')+'）':'暂无')+'；需结合个股消息/技术/资金三重驱动判断持续性。';
+   '③ 涨停股集中方向：'+(zt?'参考板块资金净流入前列（'+inB.slice(0,3).map(b=>b.name).join('、')+'）':'暂无')+'；需结合个股消息/技术/资金三重驱动判断持续性。'+
+   '④ 明日跟踪：'+(chgUpB.length?chgUpB.slice(0,3).map(b=>b.name).join('、'):'—')+' 能否延续，以及'+(inB.length?inB.slice(0,3).map(b=>b.name).join('、'):'—')+' 资金是否持续净流入。'+
+   '⑤ 风险提示：高位题材退潮、连板断板、消息面不及预期、外围夜间波动，以上任一出现时降低仓位与追高意愿。';
   sections.dragon='① 龙虎榜机构席位 vs 游资席位：'+(lhb&&lhb.length?('今日席位净买卖方向 '+lhb.map(x=>(x.name+'（'+(x.net>=0?'净买':'净卖')+flowTxt(Math.abs(x.net))+')')).join('、')):'接口未拉通，建议人工或服务端补全')+'。'+
    '② 中线 vs 短线：机构净买入偏中线布局（如 5 日 / 10 日累计），游资净买入偏快进快出（次日出货概率高）；'+(lhb&&lhb.length?('当前 '+lhb.slice(0,2).map(x=>x.name).join('、')+' '+((lhb[0]||{}).net>=0?'偏多头':'偏空头')+' 方向'):'需要具体席位数据判断')+'。'+
    '③ 北向资金（沪深港通）：'+(north&&north.length?('沪股通 / 深股通 '+north.map(n=>n.name+' '+bpc(n.chg)).join('、')+'。北向持续净流入偏多、净流出偏空，与主力资金方向共振时信号更强'):'接口未拉通，建议人工或服务端补全')+'。';
@@ -3936,10 +4234,14 @@ function briefCompose(slot,dt,gen){
  }else{
   // ----- 盘前 sections：overseas / policy / industry / announce / ladder / auction -----
   const rmbChg=(extraIdx&&extraIdx[0]&&extraIdx[0].chg!=null)?extraIdx[0].chg:null;
+  const glAvg=gl.length?gl.reduce((s,g)=>s+(g.chg||0),0)/gl.length:0;
+  const sentiTxt=glAvg>0.3?'偏多（隔夜外围普涨、风险偏好回升，开盘可顺势关注主线）':glAvg<-0.3?'偏空（外围走弱、避险情绪升温，开盘以控仓防守为主）':'震荡 / 谨慎（外围缺乏明确方向，等待盘面与集合竞价确认）';
+  const focusB=(chgUpB.length?chgUpB:inB).slice(0,5).map(b=>b.name);
   sections.policy='① 国内政策面：今日 LPR 报价（如有）需关注 1Y / 5Y 利率变动，方向降 → 利好地产 / 银行；方向升 → 利空成长股估值。'+
    '② 部委动态：发改委 / 商务部 / 工信部 / 央行等部委增量政策（如并购贷款规则修订、行业产业政策、消费 / 投资刺激方案）决定中期方向。'+
    '③ 判断标准：增量政策利好（资金 / 准入 / 减税） vs 中性偏空（监管收紧、提高门槛）。'+
-   (rmbChg!=null?('④ 汇率环境：今晨离岸人民币 USDCNH '+bpc(rmbChg)+'，'+(rmbChg>0?'人民币走弱、外资风险偏好承压、利好出口链':'人民币走强、利好人民币资产与北向流入')+'。'):'④ 汇率与政策文本需结合实时行情与「我的笔记」补全：浏览器端 JSONP 接口无新闻文本，建议人工粘贴关键政策摘要。');
+   (rmbChg!=null?('④ 汇率环境：今晨离岸人民币 USDCNH '+bpc(rmbChg)+'，'+(rmbChg>0?'人民币走弱、外资风险偏好承压、利好出口链':'人民币走强、利好人民币资产与北向流入')+'。'):'④ 汇率与政策文本需结合实时行情与「我的笔记」补全：浏览器端 JSONP 接口无新闻文本，建议人工粘贴关键政策摘要。')+
+   '⑤ 市场情绪判断：'+sentiTxt+'。';
   sections.industry='① 隔夜重大产业消息：海外龙头财报 / 产品突破（如 mRNA 疫苗三期数据 → A 股疫苗 / 创新药；三星晶圆代工涨价 → A 股半导体设备 / 材料）。'+
    '② 大宗商品异动：能源 / 有色 / 化工（如莱茵河低水位影响化工供给 → A 股化工涨价预期；铜价异动 → A 股有色板块）。'+
    '③ 国内行业催化：龙头公司业绩预告、产业基金动向、行业自律协调、重大订单 / 合同。'+
@@ -3953,11 +4255,13 @@ function briefCompose(slot,dt,gen){
   sections.ladder='① 前一日连板梯队：'+(zt?('涨停 '+zt.count+' 家、最高 '+zt.maxLb+' 连板'+(zt.zb?('，炸板 '+zt.zb+' 家'):'')+'。'):'暂无')+
    '② 封板率：'+(zt&&zt.count?(((1-(zt.zb||0)/zt.count)*100).toFixed(0)+'%'):'无')+'，'+(zt&&zt.zb!=null?(zt.zb/zt.count>0.4?'<b>封板质量一般</b>，高位断板需警惕退潮':'封板质量较好'):'需结合数据观察')+'。'+
    '③ 赚钱效应：'+(chgUpB.length?('昨日 '+chgUpB.slice(0,3).map(b=>b.name).join('、')+' 强势延续，赚钱效应偏强'):'弱势均衡')+'。'+
-   '④ 情绪周期判断：高位连板高度（昨日最高 '+(zt?zt.maxLb:'—')+' 连板）反映短线情绪周期位置；连续高位断板 = 退潮期，谨慎追高。';
+   '④ 情绪周期判断：高位连板高度（昨日最高 '+(zt?zt.maxLb:'—')+' 连板）反映短线情绪周期位置；连续高位断板 = 退潮期，谨慎追高。'+
+   '⑤ 今日早盘重点观察板块：'+(focusB.length?focusB.join('、'):'—')+'（结合 9:20-9:25 集合竞价量能与板块开盘强度择优，避免一日游追高）。';
   sections.auction='① 9:20-9:25 集合竞价观察：量价匹配（量比 / 价差）判断开盘方向。'+
    '② 买盘是否真实：9:20 后撤单的为虚假申报，9:20-9:25 不可撤单 → 此时量能代表真实买卖意愿。'+
    '③ 预判当天走势：竞价高开高量 → 强势开局；高开低量 → 高开低走风险；平开低量 → 弱势震荡；低开低量 → 恐慌 / 探底。'+
-   '④ 此板块为实时性最强、需开盘后 5-10 分钟观察；建议在「我的笔记」记录 9:25 集合竞价快照。';
+   '④ 此板块为实时性最强、需开盘后 5-10 分钟观察；建议在「我的笔记」记录 9:25 集合竞价快照。'+
+   '⑤ 风险提示：高位连板退潮 / 外围夜间波动 / 资金面边际收紧 / 板块一日游；开盘量能不足时勿追高，严守止损纪律。';
  }
  // ========== track（6-10 个板块，含 members 候选个股） ==========
  const bm=(D.invest&&D.invest.boardMembers)||{};
@@ -3974,34 +4278,150 @@ function briefCompose(slot,dt,gen){
  // ========== avoid（3-6 个板块，资金撤离 / 兑现方向） ==========
  const avoidPicks=(isEve?outB:chgDnB).filter(b=>(isEve?((b.main||0)<0):true)).slice(0,6);
  const avoid=avoidPicks.map(b=>b.name+(isEve?('（主力净流出'+flowTxt(-Math.abs(b.main||0))+',资金撤离方向）'):('（跌 '+bpc(b.chg)+',弱势兑现）')));
- return {id,slot,date,ts:date+'T'+time+':00+08:00',market:'A股沪深',summary,points,sections,track,avoid,live:true,genTs:Date.now(),
-  detail:(isEve?'本简报为盘后复盘：点「生成 / 更新盘后」按钮即时抓取东方财富公开行情与公告 JSONP 接口生成，覆盖指数、涨跌家数、成交、领涨领跌、连板梯队、商品夜盘、北向资金与当日个股公告等结构化字段。':'本简报为盘前准备：点「生成 / 更新盘前」按钮即时抓取东方财富公开行情与公告 JSONP 接口生成，覆盖隔夜外围、A 股参考、情绪周期、政策与产业消息与个股公告精选等结构化字段。')+
+ // ========== watch（盘前：自选股 / 持仓体检，每只 3-5 条关键信息 + 观察清单分级） ==========
+ let watch=[];
+ if(!isEve){
+  const stk=(D.invest&&D.invest.stocks)||[],hold=(D.invest&&D.invest.holds)||[];
+  const seen=new Set(),items=[];
+  stk.forEach(s=>items.push({kind:'stock',code:String(s.code||'').replace(/^(SH|SZ|BJ)/i,''),name:s.name||'',note:s.note||''}));
+  hold.forEach(h=>items.push({kind:'hold',code:String(h.code||'').replace(/^(SH|SZ|BJ)/i,''),name:h.name||'',cost:+h.cost}));
+  items.forEach(it=>{
+   if(!it.code||seen.has(it.code))return;seen.add(it.code);
+   const q=stkQ[it.code];if(!q||q.price==null)return;
+   const name=txCleanName(q.name)||it.name||it.code;      // 行情名乱码/缺失 → 退回用户自填名 → 再退回代码
+   const a=ann&&ann.find(x=>String(x.code||'')===it.code);
+   const volR=q.k&&q.k.volRatio!=null?q.k.volRatio:null;
+   const volState=volR!=null?(volR>1.6?'放量':volR<0.6?'缩量':'温和'):null;
+   const sup=q.k&&q.k.low20!=null?q.k.low20:null,res=q.k&&q.k.high20!=null?q.k.high20:null;
+   let tag='重点跟踪';
+   if(q.chg!=null&&q.chg<=-3)tag='风险较高';
+   else if((q.pe!=null&&q.pe>80)||(q.turn!=null&&q.turn>15)||(q.chg!=null&&q.chg>=6))tag='谨慎观察';
+   const info=[];
+   info.push('现价 '+num(q.price,2)+(q.chg!=null?('（'+bpc(q.chg)+'）'):''));
+   if(q.turn!=null)info.push('换手 '+num(q.turn,2)+'%（'+(volState||'—')+'）');
+   if(q.flow!=null)info.push('主力 '+(q.flow>=0?'净流入':'净流出')+flowTxt(Math.abs(q.flow)));
+   if(sup!=null&&res!=null)info.push('支撑 '+num(sup,2)+' / 压力 '+num(res,2));
+   if(q.pe!=null)info.push('PE '+num(q.pe,1)+(q.pb!=null?(' · PB '+num(q.pb,1)):''));
+   if(a)info.push('公告：'+(a.title.length>34?a.title.slice(0,34)+'…':a.title)+'（'+(a.sc>0?'偏多':a.sc<0?'偏空':'中性')+'）');
+   if(it.kind==='hold'&&it.cost>0&&q.price!=null){const pnl=(q.price-it.cost)/it.cost*100;info.push('持仓成本 '+num(it.cost,2)+'（'+(pnl>=0?'+':'')+num(pnl,2)+'%）');}
+   if(it.note)info.push('备注：'+(it.note.length>30?it.note.slice(0,30)+'…':it.note));
+   watch.push({kind:it.kind,code:it.code,name:name,chg:q.chg,turn:q.turn,flow:q.flow,sup:sup,res:res,tag:tag,info:info});
+  });
+  watch.sort((a,b)=>(a.tag==='风险较高'?0:a.tag==='谨慎观察'?1:2)-(b.tag==='风险较高'?0:b.tag==='谨慎观察'?1:2));
+ }
+ // ========== sectorChance（盘前：板块机会梳理，含代表个股 / 持续性 / 风险） ==========
+ let sectorChance=[];
+ if(!isEve){
+  const picks=inB.slice(0,6).concat(chgUpB.slice(0,6)).filter((b,i,a)=>a.findIndex(x=>x.code===b.code)===i).slice(0,8);
+  const bm=(D.invest&&D.invest.boardMembers)||{};
+  sectorChance=picks.map(b=>{
+   const cached=b.code&&bm[b.code];
+   const members=(cached&&cached.members)?cached.members.slice(0,3):(b.lead?[b.lead]:[]);
+   const strong=b.chg!=null&&b.chg>=2,inflow=b.main!=null&&b.main>0;
+   const persistence=strong&&inflow?'延续性强（涨幅与主力共振）':strong&&!inflow?'一日游风险（涨但主力未跟进）':inflow?'资金先行、待确认':'持续性一般';
+   const risk=strong?'高位回撤 / 追涨风险':'消息兑现 / 轮动不及风险';
+   const drive=(b.main!=null&&b.main>0)?('主力净流入 '+flowTxt(b.main)+'，资金抱团'):((b.chg!=null?('涨幅 '+bpc(b.chg)+'，情绪驱动'):'板块异动'));
+   return {name:b.name,chg:b.chg,main:b.main,drive:drive,members:members,persistence:persistence,risk:risk};
+  });
+ }
+ // ========== holdReview（盘后：持仓复盘，每只 ≤5 条结论 + 优先级清单） ==========
+ let holdReview=[];
+ if(isEve){
+  const hold=(D.invest&&D.invest.holds)||[];
+  holdReview=hold.map(h=>{
+   const code=String(h.code||'').replace(/^(SH|SZ|BJ)/i,'');
+   const q=stkQ[code];if(!q||q.price==null)return null;
+   const name=txCleanName(q.name)||h.name||code;
+   const a=ann&&ann.find(x=>String(x.code||'')===code);
+   const volR=q.k&&q.k.volRatio!=null?q.k.volRatio:null;
+   const sup=q.k&&q.k.low20!=null?q.k.low20:null,res=q.k&&q.k.high20!=null?q.k.high20:null;
+   const shChg=sh.chg||0;
+   const strength=(q.chg!=null)?(q.chg>shChg+0.5?'强于大盘':q.chg<shChg-0.5?'弱于大盘':'跟随大盘'):'—';
+   const sig=[];
+   if(q.k&&q.k.last){const L=q.k.last,H=L.h-L.l;if(H>0){if((L.h-L.c)/H>0.6)sig.push('长上影');if((L.c-L.l)/H>0.6)sig.push('长下影');}}
+   if(volR!=null){if(volR>1.6)sig.push('放量');else if(volR<0.6)sig.push('缩量');}
+   if(sup!=null&&q.price<=sup*1.005)sig.push('跌破支撑');
+   if(res!=null&&q.price>=res*0.995)sig.push('突破压力');
+   if(q.k&&q.k.bull)sig.push('均线多头');
+   const tag=(q.chg!=null&&q.chg<=-3)?'风险警示':(sig.indexOf('跌破支撑')>=0||sig.indexOf('长上影')>=0)?'减仓观察':'继续跟踪';
+   const info=[];
+   info.push('今日 '+(q.chg!=null?bpc(q.chg):'—')+'（'+strength+'）');
+   if(q.amt!=null)info.push('成交额 '+bamt(q.amt));
+   if(q.turn!=null)info.push('换手 '+num(q.turn,2)+'%');
+   if(q.flow!=null)info.push('主力 '+(q.flow>=0?'净流入':'净流出')+flowTxt(Math.abs(q.flow)));
+   if(sig.length)info.push('信号：'+sig.join('/'));
+   if(sup!=null&&res!=null)info.push('支撑 '+num(sup,2)+' / 压力 '+num(res,2));
+   if(h.cost>0&&q.price!=null){const pnl=(q.price-h.cost)/h.cost*100;info.push('成本 '+num(h.cost,2)+'（'+(pnl>=0?'+':'')+num(pnl,2)+'%）');}
+   if(a)info.push('公告：'+(a.title.length>28?a.title.slice(0,28)+'…':a.title));
+   return {code:code,name:name,chg:q.chg,flow:q.flow,turn:q.turn,strength:strength,signal:sig,sup:sup,res:res,tag:tag,info:info};
+  }).filter(Boolean);
+  holdReview.sort((a,b)=>(a.tag==='风险警示'?0:a.tag==='减仓观察'?1:2)-(b.tag==='风险警示'?0:b.tag==='减仓观察'?1:2));
+ }
+ // ========== overseasEve（盘后：美股 / 港股 / 外围观察，表格 + 结论） ==========
+ let overseasEve=null;
+ if(isEve){
+  const rows=[];
+  (glob||[]).filter(g=>g.chg!=null).forEach(g=>rows.push({name:g.name,chg:g.chg,price:g.price}));
+  (futs||[]).forEach(f=>rows.push({name:f.name,chg:f.chg,price:f.price}));
+  const pts=[];
+  if(gl.length)pts.push('美股隔夜'+gl.map(g=>g.name+bpc(g.chg)).join('、')+(gl.reduce((s,g)=>s+(g.chg||0),0)/gl.length>0?'，风险偏好偏暖、利好 A 股科技 / 成长开盘':'，风险偏好偏弱、A 股承压')+'。');
+  if(futs&&futs.length)pts.push('商品夜盘 '+futs.map(f=>f.name+bpc(f.chg)).join('、')+'，'+(futs.some(f=>/原油|煤炭/.test(f.name)&&f.chg>0)?'能源走强利好周期 / 资源股；':'')+(futs.some(f=>/铜|铝|稀土/.test(f.name))?'有色板块联动；':'')+'次日开盘关注相关板块。');
+  pts.push('美元指数、离岸人民币 USDCNH、现货黄金、美债 10Y 收益率等外部变量浏览器端无实时接口，建议在「我的笔记」补全，用于判断北向资金与人民币资产方向。');
+  pts.push('次日开盘传导：美股科技 → 港股科技 → A 股科创 / 创业板；商品夜盘 → 周期 / 有色 / 新能源。');
+  pts.push('需重点跟踪的外围事件：海外龙头财报、美联储官员讲话、地缘与大宗供应扰动、重大政策外溢。');
+  overseasEve={rows:rows,pts:pts.slice(0,8)};
+ }
+ return {id,slot,date,ts:date+'T'+time+':00+08:00',market:'A股沪深',summary,points,sections,track,avoid,watch,sectorChance,holdReview,overseasEve,live:true,genTs:Date.now(),
+  detail:(isEve?'本简报为盘后复盘：点「生成 / 更新盘后」按钮即时抓取东方财富公开行情与公告 JSONP 接口生成，覆盖指数、涨跌家数、成交、领涨领跌、连板梯队、商品夜盘、北向资金、当日个股公告，以及「持仓复盘」「美股 / 港股 / 外围观察」两张表格（数据来自持仓 / 自选股行情与板块资金）。':'本简报为盘前准备：点「生成 / 更新盘前」按钮即时抓取东方财富公开行情与公告 JSONP 接口生成，覆盖隔夜外围、A 股参考、情绪周期、政策与产业消息、个股公告精选，以及「自选股 / 持仓体检」「板块机会梳理」两张表格（数据来自自选股 / 持仓行情与板块资金）。')+
   '公告口径：扫描当日沪深主板公告（剔除股东大会 / 例行事务类），按「回购增持 / 中标合同 / 业绩预增」等关键词判定偏多，'+
-  '「减持 / 问询 / 处罚 / 终止」等判定偏空，按权重取前 10 条；政策与宏观文本类内容浏览器端无新闻接口，可在「我的笔记」补充。'+'具体规则：板块与资金为量化快照（按 mainIn / chg 排序），个股为板块成分股 top 5（基本面阈值过滤：市值 ≥30亿 / PE ∈[0,200] / PB ≤15 / 非 ST / 非涨跌停 / 换手 ≥0.5）；本简报<b>仅供参考，不构成任何投资建议</b>，投资有风险，决策需谨慎。'};
+  '「减持 / 问询 / 处罚 / 终止」等判定偏空，按权重取前 10 条；政策与宏观文本类内容浏览器端无新闻接口，可在「我的笔记」补充。'+'具体规则：板块与资金为量化快照（按 mainIn / chg 排序），个股为板块成分股 top 5（基本面阈值过滤：市值 ≥30亿 / PE ∈[0,200] / PB ≤15 / 非 ST / 非涨跌停 / 换手 ≥0.5）；体检 / 复盘表格来自持仓与自选股实时行情与近 20 日 K 线支撑压力；本简报<b>仅供参考，不构成任何投资建议</b>，投资有风险，决策需谨慎。'};
 }
 async function briefGenLive(slot,force){
  if(!ST.inv)return;
  if(ST.inv.briefBusy){ if(force)ST.inv.briefPending=true; return; } // 定时/手动同时在跑：手动刷新挂起排队，完成后自动补跑，互不冲突
  if(!force&&Date.now()-(ST.inv.briefLastGen||0)<5*60*1000)return;
+ // 限流冷却：上一次抓取已判定失败（接口限流/离线）时，短时间内不再发起请求。
+ // 连续点击只会让东财的限流窗口越撑越长（同 IP 封锁），冷却是恢复的唯一有效手段。
+ if(force&&ST.inv.briefFailTs&&Date.now()-ST.inv.briefFailTs<60*1000){
+  toast('接口正处于限流冷却中，约 '+Math.ceil((60*1000-(Date.now()-ST.inv.briefFailTs))/1000)+' 秒后再试（刚抓取失败，立即重试会加重限流）');
+  return;
+ }
  ST.inv.briefBusy=true;ST.inv.briefLastGen=Date.now();
  if(CUR==='invest'&&ST.inv.tab==='news')render();
  try{
   slot=slot||briefSlotNow();
   const isEve=slot==='evening';
+  TX_LAST_ERR='';
+  const fail={};                             // 记录每一路为何落空，用于失败时给出可定位的提示
+  const cap=(k,p)=>p.catch(e=>{fail[k]=(e&&e.message)||'空';return null;});
   const [idx,boards,glob,zt,ann]=await Promise.all([
-   briefFetchIdx(LIVE_IDX).catch(()=>null),
-   briefFetchBoards().catch(()=>null),
-   briefFetchIdx(GLOB_IDX).catch(()=>null),
-   briefFetchZT().catch(()=>null),
-   annFetch(!!force).catch(()=>null)   // 个股公告精选：手动点击时强制刷新
+   cap('指数',briefFetchIdx(LIVE_IDX)),
+   cap('板块',briefFetchBoards()),
+   cap('环球',briefFetchIdx(GLOB_IDX)),
+   cap('涨停池',briefFetchZT()),
+   cap('公告',annFetch(!!force))             // 个股公告精选：手动点击时强制刷新
   ]);
-  if(!idx&&!boards&&!glob){ST.inv.briefFailTs=Date.now();if(force)toast('简报数据抓取失败（接口限流/离线），稍后重试');return;}
-  // 增量数据源：盘前拉美股 + 离岸人民币；盘后拉北向资金 + 龙虎榜 + 商品夜盘
-  const [north,lhb,futs,extraIdx]=await Promise.all([
+  if(!idx&&!boards&&!glob){
+   ST.inv.briefFailTs=Date.now();
+   if(force){
+    // 三路全空的诊断：东财限流时腾讯兜底本应顶上；若它也失败，必须把真实原因说出来——
+    // 只报「接口限流/离线」无法区分「东财被封」与「兜底源也被拦」，曾因此在多份副本间反复排查。
+    // ⚠ 判空必须看「结果是否为空」。不能按 promise 是否抛错判断：briefFetchIdx 内部已 .catch 吞掉异常并返回 null，
+    //   按抛错判定会把失败的路标成 ✓（实测出现过「指数✓/环球✓ 三路全空」这种自相矛盾的提示）。
+    const empty=['指数','板块','环球'].filter((k,i)=>![idx,boards,glob][i]);
+    const why=TX_LAST_ERR||fail[empty[0]]||'';
+    toast('简报抓取失败：'+empty.join(' / ')+' 均未取到数据'+(why?('（'+why+'）'):'')+
+      '；已进入 60 秒冷却，稍后再点一次刷新即可恢复 · 构建 '+BUILD);
+   }
+   return;
+  }
+  // 增量数据源：盘前拉美股 + 离岸人民币；盘后拉北向资金 + 龙虎榜 + 商品夜盘；个股行情（体检 / 复盘表格）
+  const [north,lhb,futs,extraIdx,stkQ]=await Promise.all([
    isEve?briefFetchNorth().catch(()=>null):Promise.resolve(null),
    isEve?briefFetchLonghubang().catch(()=>null):Promise.resolve(null),
    isEve?briefFetchFutures().catch(()=>null):Promise.resolve(null),
-   !isEve?briefFetchIdx(MORN_IDX_EXTRA).catch(()=>null):Promise.resolve(null)
+   !isEve?briefFetchIdx(MORN_IDX_EXTRA).catch(()=>null):Promise.resolve(null),
+   briefFetchQuotes().catch(()=>null)
   ]);
   // 预拉「实际要展示的板块」的成分股——缓存范围必须与 briefCompose 的 track/avoid 取板块一致
   // 旧实现按 main 排序只抓 6 个，与显示按 chg 排序的 chgUpB[0..9] / inB[0..9] / chgDnB[0..4] / outB[0..4] 几乎不重叠 → 经常看不到个股
@@ -4030,7 +4450,7 @@ async function briefGenLive(slot,force){
     if(toFetch.length&&force)toast('已为 '+toFetch.length+' 个板块预拉成分股（更新个股缓存）');
    }
   }catch(e){}
-  const b=briefCompose(slot,{idx,boards,glob,zt,north,lhb,futs,extraIdx,ann},new Date());
+  const b=briefCompose(slot,{idx,boards,glob,zt,north,lhb,futs,extraIdx,ann,stkQ:stkQ||{}},new Date());
   D.invest.liveBriefs=D.invest.liveBriefs||{};
   D.invest.liveBriefs[b.id]=b;save();
   ST.inv.briefFailTs=0;
@@ -4126,6 +4546,76 @@ function fmtNums(v,hl){
   while((m=re.exec(v))){ out+='<div style="margin:4px 0;padding-left:2px"><b style="color:var(--brand);margin-right:4px">'+m[1]+'</b>'+hlText(m[2].trim(),hl)+'</div>'; }
   return out;
 }
+const BRIEF_EXTRA=['watch','sectorChance','holdReview','overseasEve'];
+const BE_TAG=t=>((t==='重点跟踪'||t==='继续跟踪')?'g':(t==='风险较高'||t==='风险警示')?'r':'y');
+function briefExtraHtml(b){
+ const isEve=b.slot==='evening';
+ let h='';
+ if(!isEve){
+  if(b.watch&&b.watch.length){
+   h+='<div style="margin-top:12px;padding-top:9px;border-top:1px dashed var(--line2)">'+
+     '<span class="tag b" style="font-weight:700;font-size:12px">自选股 / 持仓体检（盘前）</span>'+
+     '<div style="display:flex;flex-direction:column;gap:7px;margin-top:7px">'+
+     b.watch.map(w=>{
+      const chgCls=w.chg==null?'var(--ink2)':w.chg>0?'var(--red)':w.chg<0?'var(--green)':'var(--ink2)';
+      return '<div style="border:1px solid var(--line);border-radius:9px;padding:7px 9px">'+
+       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">'+
+        '<b style="font-size:13px">'+esc(w.name)+'</b>'+
+        '<span style="font-size:11px;color:var(--ink3)">'+esc(w.code)+'</span>'+
+        (w.kind==='hold'?'<span class="tag b" style="font-size:10px;padding:1px 5px">持仓</span>':'')+
+        '<span class="tag '+BE_TAG(w.tag)+'" style="font-size:10px;padding:1px 6px">'+w.tag+'</span>'+
+        '<span style="font-size:11.5px;color:'+chgCls+'">'+bpc(w.chg)+'</span>'+
+       '</div>'+
+       '<div style="font-size:11.5px;color:var(--ink2);line-height:1.7">'+w.info.map(i=>'· '+esc(i)).join('<br>')+'</div>'+
+      '</div>';
+     }).join('')+'</div></div>';
+  }
+  if(b.sectorChance&&b.sectorChance.length){
+   h+='<div style="margin-top:12px;padding-top:9px;border-top:1px dashed var(--line2)">'+
+     '<span class="tag p" style="font-weight:700;font-size:12px">板块机会梳理（盘前）</span>'+
+     '<div style="display:flex;flex-direction:column;gap:7px;margin-top:7px">'+
+     b.sectorChance.map(s=>{
+      const members=(s.members||[]).filter(Boolean).map(m=>typeof m==='string'?m:(m.name||m)).slice(0,3);
+      return '<div style="border:1px solid var(--line);border-radius:9px;padding:7px 9px">'+
+       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">'+
+        '<b style="font-size:13px">'+esc(s.name)+'</b>'+
+        (s.chg!=null?'<span style="font-size:11.5px;color:'+(s.chg>0?'var(--red)':'var(--green)')+'">'+bpc(s.chg)+'</span>':'')+
+        (s.main!=null?'<span style="font-size:11px;color:var(--ink3)">主力 '+(s.main>=0?'+':'')+flowTxt(s.main)+'</span>':'')+
+       '</div>'+
+       '<div style="font-size:11.5px;color:var(--ink2);line-height:1.65">· 驱动：'+esc(s.drive)+'</div>'+
+       (members.length?'<div style="font-size:11.5px;color:var(--ink2);line-height:1.65">· 代表个股：'+members.map(x=>esc(x)).join('、')+'</div>':'')+
+       '<div style="font-size:11.5px;color:var(--ink2);line-height:1.65">· 持续性：'+esc(s.persistence)+'；风险：'+esc(s.risk)+'</div>'+
+      '</div>';
+     }).join('')+'</div></div>';
+  }
+ } else {
+  if(b.holdReview&&b.holdReview.length){
+   h+='<div style="margin-top:12px;padding-top:9px;border-top:1px dashed var(--line2)">'+
+     '<span class="tag p" style="font-weight:700;font-size:12px">持仓复盘（盘后）</span>'+
+     '<div style="display:flex;flex-direction:column;gap:7px;margin-top:7px">'+
+     b.holdReview.map(w=>{
+      const chgCls=w.chg==null?'var(--ink2)':w.chg>0?'var(--red)':w.chg<0?'var(--green)':'var(--ink2)';
+      return '<div style="border:1px solid var(--line);border-radius:9px;padding:7px 9px">'+
+       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">'+
+        '<b style="font-size:13px">'+esc(w.name)+'</b>'+
+        '<span style="font-size:11px;color:var(--ink3)">'+esc(w.code)+'</span>'+
+        '<span class="tag '+BE_TAG(w.tag)+'" style="font-size:10px;padding:1px 6px">'+w.tag+'</span>'+
+        '<span style="font-size:11.5px;color:'+chgCls+'">'+bpc(w.chg)+'</span>'+
+       '</div>'+
+       '<div style="font-size:11.5px;color:var(--ink2);line-height:1.7">'+w.info.map(i=>'· '+esc(i)).join('<br>')+'</div>'+
+      '</div>';
+     }).join('')+'</div></div>';
+  }
+  if(b.overseasEve){
+   const rows=(b.overseasEve.rows||[]).map(r=>'<tr><td style="padding:3px 8px;font-size:12px">'+esc(r.name)+'</td><td style="padding:3px 8px;font-size:12px;text-align:right;color:'+(r.chg>0?'var(--red)':r.chg<0?'var(--green)':'var(--ink2)')+'">'+bpc(r.chg)+'</td></tr>').join('');
+   h+='<div style="margin-top:12px;padding-top:9px;border-top:1px dashed var(--line2)">'+
+     '<span class="tag b" style="font-weight:700;font-size:12px">盘后美股 / 港股 / 外围观察</span>'+
+     (rows?'<table style="border-collapse:collapse;margin:6px 0;width:100%"><tbody>'+rows+'</tbody></table>':'')+
+     '<div style="font-size:11.5px;color:var(--ink2);line-height:1.7">'+(b.overseasEve.pts||[]).map(p=>'· '+esc(p)).join('<br>')+'</div></div>';
+  }
+ }
+ return h;
+}
 function briefCard(b,m){
   const isEve=b.slot==='evening';
   const slot=isEve?'盘后':'盘前';
@@ -4134,6 +4624,7 @@ function briefCard(b,m){
   const open=ST.inv.open===b.id;
   const secs=isEve?EVEN_SECS:MORN_SECS;
   const secHtml=secs.map(s=>{const v=b.sections&&b.sections[s.k];return v?'<div style="margin-top:10px"><span class="tag '+secCls+'" style="font-weight:700;font-size:12px;margin-bottom:5px">'+esc(s.t)+'</span><div style="font-size:13px;line-height:1.7;white-space:pre-wrap;color:var(--ink2);margin-top:3px">'+fmtNums(v,m.hl)+'</div></div>':''}).join('');
+  const extraHtml=briefExtraHtml(b);
   const pts=(b.points||[]).map(p=>'<li style="margin:3px 0;line-height:1.6">'+hlText(p,m.hl)+'</li>').join('');
   const TA_T=['o','b','p','y','g'];
   const TA_A=['r','o','p','y'];
@@ -4182,6 +4673,7 @@ function briefCard(b,m){
    (b.summary?'<div style="font-size:13.5px;font-weight:600;line-height:1.6;color:var(--ink)">'+hlText(b.summary,m.hl)+'</div>':'')+
    (pts?'<ul style="font-size:12.5px;color:var(--ink2);margin:7px 0 0 18px;padding:0">'+pts+'</ul>':'')+
    secHtml+
+   extraHtml+
    taHtml+
    (open?'<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line2);font-size:12px;color:var(--ink2);white-space:pre-wrap;line-height:1.7">'+hlText(b.detail||'（无更多详情）',m.hl)+'</div>':'')+
    noteHtml+
@@ -4212,6 +4704,7 @@ function briefMerged(){
     if(!(b.points&&b.points.length)&&lv.points) out.points=lv.points;
     if(!(b.track&&b.track.length)&&lv.track) out.track=lv.track;
     if(!(b.avoid&&b.avoid.length)&&lv.avoid) out.avoid=lv.avoid;
+    BRIEF_EXTRA.forEach(f=>{ if((b[f]==null||(Array.isArray(b[f])&&!b[f].length))&&lv[f]!=null) out[f]=lv[f]; });
     out._src='ai';
     return out;
   });
@@ -4231,7 +4724,7 @@ function briefPage(slot){
   const busy=!!ST.inv.briefBusy;
   const sameSlotNow=briefSlotNow()===slot;
   const head='<div class="card"><div class="ch"><h3>'+ic(isEve?'moon':'sun',15)+slotLabel+'简报</h3>'+
-    '<span class="sub">A股沪深 · 手动更新：点按钮即刻抓取最新数据并改写当日'+slotLabel+'简报（无定时任务）</span><div class="sp"></div>'+
+    '<span class="sub">A股沪深 · 手动更新：点按钮即刻抓取最新数据并改写当日'+slotLabel+'简报（无定时任务）· 构建 '+BUILD+'</span><div class="sp"></div>'+
     '<button class="btn sm" onclick="briefSyncArch()" title="重新拉取 briefs.json 深度存档">'+ic('upload',13)+'同步存档</button>'+
     '<button class="btn sm '+(busy?'gh':'pri')+'" onclick="briefGenLive(\''+slot+'\',true)" title="点击即刻抓取最新行情、板块资金、'+(isEve?'龙虎榜 / 商品夜盘':'连板梯队')+'与个股公告，更新当日'+slotLabel+'简报">'+ic('refresh',13)+(busy?'生成中…':('生成 / 更新'+slotLabel))+'</button></div>';
   if(BRIEFS===null) return head+'<div class="empty">'+ic('clock',28)+'正在加载简报…</div></div>';
