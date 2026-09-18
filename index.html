@@ -136,6 +136,27 @@ font-weight:600;background:var(--line2);color:var(--ink2);white-space:nowrap}
 .empty{text-align:center;padding:26px 14px;color:var(--ink3);font-size:12.5px}
 .empty svg{margin:0 auto 8px;stroke:#DCD3CB;stroke-width:1.5;fill:none}
 
+/* ===== 搜索框 ===== */
+.srch{display:flex;gap:6px;align-items:center;margin-bottom:11px}
+.srch .inp{height:38px;font-size:14px;padding:0 12px}
+.srch .btn{flex:0 0 auto}
+
+/* ===== 富文本：编辑器 + 展示 ===== */
+.rtebar{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:5px}
+.rtebar .btn{height:28px;min-width:28px;padding:0 8px;font-size:11.5px}
+.rte{min-height:70px;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:#fff;
+font-size:13.5px;line-height:1.7;color:var(--ink);overflow-y:auto;transition:.15s;word-break:break-word}
+.rte:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--soft)}
+.rte:empty:before{content:attr(data-ph);color:var(--ink3)}
+.rte p{margin:0 0 6px}.rte p:last-child{margin-bottom:0}
+.rte ul,.rte ol{margin:4px 0;padding-left:22px}.rte li{margin:2px 0}
+.rte b,.rte strong{font-weight:600}
+.rt{font-size:12.5px;line-height:1.7;color:var(--ink2);word-break:break-word;margin-top:4px}
+.rt p{margin:0 0 6px}.rt p:last-child{margin-bottom:0}
+.rt ul,.rt ol{margin:4px 0;padding-left:20px}.rt li{margin:1px 0}
+.rt b,.rt strong{font-weight:600;color:var(--ink)}
+.rt div{margin:0 0 4px}
+
 .bar{height:8px;border-radius:5px;background:var(--line2);overflow:hidden}
 .bar i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,var(--brand),var(--brand2));transition:width .5s}
 .bar.gn i{background:linear-gradient(90deg,#12A97B,#39C79B)}
@@ -369,6 +390,9 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
 .btn{height:44px;padding:0 15px;min-width:44px}
 .btn.sm{height:36px;min-width:36px;padding:0 11px}
 .inp,.sel{height:44px}
+.srch .inp{height:42px;font-size:15px}
+.rte{font-size:15px;min-height:80px}
+.rtebar .btn{height:34px;min-width:34px;padding:0 10px;font-size:12px}
 .ck{width:26px;height:26px}
 .modal{max-width:100%;border-radius:18px}
 .day{aspect-ratio:auto;min-height:50px;overflow:hidden}
@@ -622,6 +646,106 @@ function val(id){const e=document.getElementById(id);return e?e.value.trim():''}
 function nval(id){const e=document.getElementById(id);return e?(parseFloat(e.value)||0):0}
 function cval(id){const e=document.getElementById(id);return e?e.checked:false}
 
+/* ==================== 富文本（编辑 / 清洗 / 渲染） ====================
+   编辑器用 contenteditable + execCommand，只做加粗、斜体、下划线、列表这类基础格式。
+   存进去的是 HTML 字符串，但**写入前与读出时都会过 rtClean() 白名单**，剥离所有属性与危险标签，
+   所以渲染时可以直接插 innerHTML 而不必担心 XSS（script、iframe、on 事件、style 一律活不下来）。
+   历史数据是纯文本（含 \n）：rtToHtml() 会识别「不含任何 HTML 标签」的旧值，按换行转成 <br>，
+   因此老笔记的段落结构不会丢——这是兼容的关键一步。 */
+const RT_OK={B:1,STRONG:1,I:1,EM:1,U:1,S:1,BR:1,P:1,DIV:1,UL:1,OL:1,LI:1,SPAN:1,BLOCKQUOTE:1,CODE:1,H3:1,H4:1};
+/* 这类容器连内容一起丢（不拆壳），避免脚本正文以纯文本形式留在页面上 */
+const RT_KILL={SCRIPT:1,STYLE:1,IFRAME:1,OBJECT:1,EMBED:1,SVG:1,MATH:1,TEMPLATE:1,NOSCRIPT:1,LINK:1,META:1};
+const RT_VOID=/<\s*(br|hr)\s*\/?>/i;
+const RT_PAIR=/<\s*(p|div|ul|ol|li|b|strong|i|em|u|s|span|blockquote|code|h3|h4)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/i;
+/* 判定存档值是不是富文本：必须有自闭合的 br，或成对出现的格式 / 结构标签。
+   这样历史笔记里零散的尖括号（比如手写的 "3<5"、"<b"）不会被误判成 HTML，换行才不会丢。 */
+function rtIsHtml(s){return RT_VOID.test(s)||RT_PAIR.test(s)}
+/* 无 DOMParser 时的降级清洗（Node 测试环境）：正则走一遍同样的白名单规则 */
+const RT_DROP=/^(script|style|iframe|object|embed|svg|math|link|meta|img|input|button|form|table|iframe)$/i;
+function rtRegexClean(s){
+ let t=String(s==null?'':s);
+ t=t.replace(/<!--[\s\S]*?-->/g,'')
+  .replace(/<\s*(script|style|iframe|object|embed|svg|math|template)\b[\s\S]*?<\s*\/\s*\1\s*>/gi,'')
+  .replace(/<\s*\/?\s*(script|style|iframe|object|embed|svg|math|link|meta|img|input|button|form|table)\b[^>]*>/gi,'')
+  .replace(/<\s*(\/)?\s*([a-zA-Z][\w-]*)([^>]*)>/g,(all,slash,tag)=>{
+   const U=String(tag).toUpperCase(),T=String(tag).toLowerCase();
+   if(!RT_OK[U]||RT_DROP.test(tag))return '';      // 非白名单：连标签一起丢，文字留下
+   return '<'+(slash?'/':'')+T+'>';                 // 白名单：只留标签名（小写），属性全剥
+  });
+ return t;
+}
+function rtClean(html){
+ const s=String(html==null?'':html);
+ if(!s)return '';
+ let doc=null;
+ try{doc=new DOMParser().parseFromString('<body>'+s+'</body>','text/html')}catch(e){doc=null}
+ if(!doc||!doc.body)return rtRegexClean(s);
+ (function walk(n){
+  [].slice.call(n.childNodes).forEach(c=>{
+   if(c.nodeType===1){
+    if(RT_KILL[c.tagName]){n.removeChild(c);return}   // 危险容器：整块删除
+    if(!RT_OK[c.tagName]){                     // 非白名单标签：拆掉外壳、保留里面的文字
+     walk(c);
+     const f=doc.createDocumentFragment();
+     while(c.firstChild)f.appendChild(c.firstChild);
+     n.replaceChild(f,c);
+    }else{
+     [].slice.call(c.attributes).forEach(a=>c.removeAttribute(a.name));   // 一律剥属性（含 on*、style、href）
+     walk(c);
+    }
+   }else if(c.nodeType!==3){n.removeChild(c);}  // 注释、CDATA 之类直接丢
+  });
+ })(doc.body);
+ return doc.body.innerHTML;
+}
+/* 纯文本 → 可展示 HTML（老数据兼容）：先转义，再把换行还原成 <br> */
+function rtText2Html(s){return esc(s).replace(/\r\n?/g,'\n').split('\n').join('<br>')}
+/* 任意存档值 → 可展示 / 可编辑 HTML */
+function rtToHtml(s){const v=String(s==null?'':s);if(!v)return '';return rtIsHtml(v)?rtClean(v):rtText2Html(v)}
+/* 渲染：包一层 .rt 容器，段落间距 / 列表缩进 / 加粗由 CSS 负责 */
+function rtHtml(s){const v=String(s==null?'':s);if(!v||!v.trim())return '';return '<div class="rt">'+rtToHtml(v)+'</div>'}
+/* 去标签后的纯文本：给搜索与判空用 */
+function rtText(s){
+ const v=String(s==null?'':s);if(!v)return '';
+ let t='';
+ try{t=(new DOMParser().parseFromString('<body>'+rtToHtml(v)+'</body>','text/html').body.textContent)||''}catch(e){t=''}
+ if(!t)t=rtToHtml(v).replace(/<br\s*\/?>/gi,' ').replace(/<[^>]*>/g,' ')
+   .replace(/&nbsp;/g,' ').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&amp;/g,'&');
+ return t.replace(/\u00a0/g,' ').replace(/\s+/g,' ').trim();
+}
+function rtEmpty(s){return !rtText(s)}
+/* 编辑器：工具栏 + contenteditable */
+function rtEditor(id,v,ph,h){
+ const b=(cmd,txt,tt)=>'<button type="button" class="btn sm gh" onmousedown="event.preventDefault()" onclick="rtCmd(\''+id+'\',\''+cmd+'\')" title="'+tt+'">'+txt+'</button>';
+ return '<div class="rtebar">'+
+  b('bold','<b>B</b>','加粗')+b('italic','<i>I</i>','斜体')+b('underline','<u>U</u>','下划线')+
+  b('insertUnorderedList','• 列表','无序列表')+b('insertOrderedList','1. 列表','有序列表')+
+  b('removeFormat','清除','清除所选格式')+
+ '</div>'+
+ '<div class="rte" id="'+id+'" contenteditable="true" role="textbox" aria-multiline="true" data-ph="'+esc(ph||'')+'"'+
+ ' style="min-height:'+(h||80)+'px" onfocus="rtInit()" onpaste="rtPaste(event)">'+rtToHtml(v)+'</div>';
+}
+/* 工具栏按钮用 onmousedown 阻止默认行为，保住编辑区选区；这里再补上段落与样式策略 */
+function rtInit(){
+ try{document.execCommand('styleWithCSS',false,false);document.execCommand('defaultParagraphSeparator',false,'p')}catch(err){}
+}
+function rtCmd(id,cmd){
+ const e=document.getElementById(id);if(!e)return;
+ rtInit();
+ e.focus();                                  // focus 会恢复上一次的光标 / 选区
+ try{document.execCommand(cmd,false,null)}catch(err){}
+}
+/* 粘贴一律走纯文本：从网页复制的样式 / 脚本不会带进编辑器 */
+function rtPaste(ev){
+ const cd=ev.clipboardData||window.clipboardData;if(!cd)return;
+ const t=cd.getData('text/plain');if(!t)return;
+ ev.preventDefault();
+ try{document.execCommand('insertHTML',false,esc(t).replace(/\r\n?/g,'\n').split('\n').join('<br>'))}catch(err){}
+}
+/* 读取编辑器内容（已过白名单清洗） */
+function rtVal(id){const e=document.getElementById(id);if(!e)return '';const h=rtClean(e.innerHTML);
+ return rtText(h)?h:''}   // 只有一堆空标签 / &nbsp; 时视为空
+
 /* ==================== 法定节假日 / 调休 ====================
    依据：《国务院办公厅关于2026年部分节假日安排的通知》国办发明电〔2025〕7号（2025-11-04 发布）
    原文 https://www.gov.cn/gongbao/2025/issue_12406/202511/content_7048922.html
@@ -766,6 +890,7 @@ function formM(title,fields,cb,w){
   h+='<div class="fld"><label>'+f.l+(f.req?' *':'')+'</label>';
   if(f.t==='sel')h+='<select class="sel" id="'+f.id+'">'+f.o.map(o=>{const v=typeof o==='string'?o:o.v;const n=typeof o==='string'?o:o.n;return '<option value="'+esc(v)+'"'+(f.v==v?' selected':'')+'>'+esc(n)+'</option>'}).join('')+'</select>';
   else if(f.t==='ta')h+='<textarea class="ta" id="'+f.id+'" placeholder="'+esc(f.p||'')+'" style="min-height:'+(f.h||80)+'px">'+esc(f.v||'')+'</textarea>';
+  else if(f.t==='rt')h+=rtEditor(f.id,f.v,f.p,f.h);   // 富文本：值由 rtVal(id) 取
   else if(f.t==='ck')h+='<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px"><input type="checkbox" id="'+f.id+'" '+(f.v?'checked':'')+' style="width:19px;height:19px;accent-color:#E8703A"> '+esc(f.p||'')+'</label>';
   else if(f.t==='img'){h+='<div class="imgpick" id="'+f.id+'_wrap">';if(f.v&&String(f.v).indexOf('data:image')===0){h+='<img class="imgprev" id="'+f.id+'_img" src="'+esc(f.v)+'" onclick="imgViewData(this.src)"><button type="button" class="btn sm gh" id="'+f.id+'_rm" onclick="imgRemove(\''+f.id+'\')">'+ic('trash',12)+'移除</button>'}h+='<input type="file" accept="image/*" class="imgfile" onchange="imgPick(this,\''+f.id+'\')"><input type="hidden" id="'+f.id+'" value="'+esc(f.v||'')+'"></div>';}
   else if(f.t==='lvl'){
@@ -3792,7 +3917,7 @@ async function briefSyncArch(){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 /* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
    ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
-const BUILD='2026-09-18.1';
+const BUILD='2026-09-18.2';
 /* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
 let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
@@ -6261,58 +6386,120 @@ function rvIdeaAdd(id){
   ()=>{const t=val('ri_t');if(!t){toast('请填标题');return false}const o={id:n?n.id:uid(),title:t,tag:val('ri_tag'),body:val('ri_x'),date:n?n.date:TODAY};if(n)Object.assign(n,o);else(D.review.ideas=D.review.ideas||[]).push(o);save();toast('已保存');});
 }
 
-/* ==================== 📝 备忘录 ==================== */
+/* ==================== 📝 备忘录 ====================
+   搜索：关键词存 ST.memo.q，位于分类标签下方，对当前子标签生效；
+        输入时只重绘 #memoList（局部刷新），输入框不重建，因此不会丢焦点 / 光标。
+        匹配范围统一映射成「标题 + 内容 + 备注」三段（各子标签字段不同，见 memoText）。
+   富文本：随笔的「内容」、重要信息的「内容 / 备注」都是 rtEditor，存 HTML 字符串，
+        出入库都过 rtClean()；老数据若是纯文本，rtToHtml() 会按换行还原成 <br>。 */
+function memoQ(){return String((ST.memo&&ST.memo.q)||'').trim()}
+function memoSearchBox(){
+ const q=memoQ();
+ return '<div class="srch">'+
+  '<input class="inp" id="memo_q" type="text" autocomplete="off" spellcheck="false" value="'+esc(q)+'"'+
+   ' placeholder="搜索标题 / 内容 / 备注" oninput="memoSearch(this.value)"'+
+   ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();memoSearch(this.value)}">'+
+  (q?'<button class="btn sm gh" onclick="memoClear()" title="清空关键词">'+ic('x',13)+'清除</button>':'')+
+ '</div>';
+}
+function memoSearch(v){
+ ST.memo=ST.memo||{tab:'note',q:''};
+ ST.memo.q=String(v||'');
+ const el=document.getElementById('memoList');
+ if(el)el.innerHTML=memoListHtml();          // 只换列表，不动搜索框
+}
+function memoClear(){ST.memo=(ST.memo||{});ST.memo.q='';const i=document.getElementById('memo_q');if(i)i.value='';memoSearch('')}
+function memoText(o){
+ const t=ST.memo&&ST.memo.tab;
+ if(t==='vault')return [rtText(o.title),rtText(o.value),rtText(o.note)].join(' ');
+ if(t==='chore')return [String(o.text||''),String(o.cat||'')].join(' ');
+ return [rtText(o.body),String(o.tag||'')].join(' ');
+}
+function memoMatch(o){
+ const q=memoQ().toLowerCase();
+ if(!q)return true;
+ return memoText(o).toLowerCase().indexOf(q)>=0;
+}
+function memoAll(){
+ const t=ST.memo&&ST.memo.tab;
+ if(t==='vault')return (D.memo.vault||[]).slice();
+ if(t==='chore')return (D.memo.chores||[]).slice().sort((a,b)=>(a.done?1:0)-(b.done?1:0));
+ return (D.memo.notes||[]).slice().sort((a,b)=>(b.pin?1:0)-(a.pin?1:0)||String(b.date||'').localeCompare(String(a.date||'')));
+}
+function memoEmptyTxt(){
+ const t=ST.memo&&ST.memo.tab;
+ return t==='vault'?'账号 / 证件 / 紧急联系人':t==='chore'?'购物清单 / 快递取件码':'脑子里闪过的，先记下来';
+}
+function memoListHtml(){
+ const q=memoQ(),all=memoAll(),L=all.filter(memoMatch),t=ST.memo&&ST.memo.tab;
+ let h='';
+ if(q&&all.length)h+='<div class="sub" style="margin:0 2px 8px">命中 '+L.length+' / '+all.length+' 条</div>';
+ if(!L.length)return h+'<div class="empty">'+ic('search',28)+(q?'没有匹配「'+esc(q)+'」的记录':memoEmptyTxt())+'</div>';
+ const row=t==='vault'?memoVaultRow:t==='chore'?memoChoreRow:memoNoteRow;
+ return h+L.map(row).join('');
+}
+function memoNoteRow(n){
+ return '<div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:9px'+(n.pin?';background:var(--yellow-s)':'')+'">'+
+  '<div style="display:flex;justify-content:space-between;gap:8px"><span style="font-size:11px;color:var(--ink3)">'+esc(n.date||'')+(n.tag?(' · '+esc(n.tag)):'')+'</span>'+(n.pin?'<span class="tag y">置顶</span>':'')+'</div>'+
+  rtHtml(n.body)+                                   // 富文本：段落 / 换行 / 加粗 / 列表原样渲染
+  '<div style="display:flex;gap:5px;justify-content:flex-end;margin-top:6px">'+(n.pin?'':'<button class="btn sm gh" onclick="memoPin(this.dataset.id)" data-id="'+esc(n.id)+'" title="置顶">'+ic('star',12)+'</button>')+
+  '<button class="btn sm gh" onclick="memoNoteAdd(this.dataset.id)" data-id="'+esc(n.id)+'">'+ic('edit',12)+'</button>'+
+  '<button class="btn sm gh dg" onclick="delItem(D.memo.notes,this.dataset.id,this.dataset.label)" data-id="'+esc(n.id)+'" data-label="随笔">'+ic('trash',12)+'</button></div></div>';
+}
+function memoVaultRow(v){
+ return '<div class="li"><div class="gr"><div class="t1">'+esc(v.title)+'</div>'+
+  (v.value?'<div class="rt" style="font-family:monospace;word-break:break-all">'+rtToHtml(v.value)+'</div>':'')+
+  (v.note?rtHtml(v.note):'')+'</div>'+
+  '<button class="btn sm gh" onclick="memoVaultAdd(this.dataset.id)" data-id="'+esc(v.id)+'">'+ic('edit',12)+'</button>'+
+  '<button class="btn sm gh dg" onclick="delItem(D.memo.vault,this.dataset.id,this.dataset.label)" data-id="'+esc(v.id)+'" data-label="重要信息">'+ic('trash',12)+'</button></div>';
+}
+function memoChoreRow(c){
+ return '<div class="li" style="'+(c.done?'opacity:.5':'')+'">'+
+  '<span class="ck'+(c.done?' on':'')+'" onclick="memoChoreDone(this.dataset.id)" data-id="'+esc(c.id)+'">'+ic('check',14)+'</span>'+
+  '<div class="gr"><div class="t1" style="'+(c.done?'text-decoration:line-through':'')+'">'+esc(c.text)+(c.cat?(' <span class="t2">· '+esc(c.cat)+'</span>'):'')+'</div></div>'+
+  '<button class="btn sm gh" onclick="memoChoreAdd(this.dataset.id)" data-id="'+esc(c.id)+'">'+ic('edit',12)+'</button>'+
+  '<button class="btn sm gh dg" onclick="delItem(D.memo.chores,this.dataset.id,this.dataset.label)" data-id="'+esc(c.id)+'" data-label="琐事">'+ic('trash',12)+'</button></div>';
+}
 function R_memo(){
- ST.memo=ST.memo||{tab:'note'};
+ ST.memo=ST.memo||{tab:'note',q:''};
+ if(ST.memo.q==null)ST.memo.q='';
  const tab=(k,n)=>'<div class="tab'+(ST.memo.tab===k?' on':'')+'" onclick="ST.memo.tab=\''+k+'\';render()">'+n+'</div>';
- return '<div class="tabs" style="margin-bottom:14px">'+tab('note','随笔')+tab('vault','重要信息')+tab('chore','琐事清单')+'</div>'+
+ return '<div class="tabs" style="margin-bottom:11px">'+tab('note','随笔')+tab('vault','重要信息')+tab('chore','琐事清单')+'</div>'+
+  memoSearchBox()+
   (ST.memo.tab==='note'?memoNote():ST.memo.tab==='vault'?memoVault():memoChore());
 }
 function memoNote(){
- const L=(D.memo.notes||[]).slice().sort((a,b)=>(b.pin?1:0)-(a.pin?1:0)||b.date.localeCompare(a.date));
  return '<div class="card"><div class="ch"><h3>'+ic('edit',15)+'随笔</h3><div class="sp"></div>'+
   '<button class="btn sm pri" onclick="memoNoteAdd()">'+ic('plus',14)+'记一下</button></div>'+
-  (L.length?L.map(n=>'<div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:9px'+(n.pin?';background:var(--yellow-s)':'')+'">'+
-   '<div style="display:flex;justify-content:space-between;gap:8px"><span style="font-size:11px;color:var(--ink3)">'+n.date+(n.tag?(' · '+esc(n.tag)):'')+'</span>'+(n.pin?'<span class="tag y">置顶</span>':'')+'</div>'+
-   '<div style="font-size:13px;line-height:1.7;color:var(--ink2);white-space:pre-wrap;margin-top:4px">'+esc(n.body||'')+'</div>'+
-   '<div style="display:flex;gap:5px;justify-content:flex-end;margin-top:6px">'+(n.pin?'':'<button class="btn sm gh" onclick="memoPin(this.dataset.id)" data-id="'+esc(n.id)+'" title="置顶">'+ic('star',12)+'</button>')+
-   '<button class="btn sm gh" onclick="memoNoteAdd(this.dataset.id)" data-id="'+esc(n.id)+'">'+ic('edit',12)+'</button>'+
-   '<button class="btn sm gh dg" onclick="delItem(D.memo.notes,this.dataset.id,this.dataset.label)" data-id="'+esc(n.id)+'" data-label="随笔">'+ic('trash',12)+'</button></div></div>').join('')
-   :'<div class="empty">'+ic('edit',28)+'脑子里闪过的，先记下来</div>')+'</div>';
+  '<div id="memoList">'+memoListHtml()+'</div></div>';
 }
 function memoNoteAdd(id){
  const n=id?(D.memo.notes||[]).find(x=>x.id===id):null;
- formM(n?'编辑随笔':'记一笔',[{id:'mn_x',l:'内容',t:'ta',v:n?n.body:'',h:80,req:1},{id:'mn_t',l:'标签',v:n?n.tag:'',p:'如 灵感 / 待办'}],
-  ()=>{const x=val('mn_x');if(!x){toast('请填内容');return false}const o={id:n?n.id:uid(),body:x,tag:val('mn_t'),pin:n?n.pin:false,date:TODAY};
+ formM(n?'编辑随笔':'记一笔',[{id:'mn_x',l:'内容',t:'rt',v:n?n.body:'',h:80,req:1,p:'支持加粗 / 列表，回车换行'},{id:'mn_t',l:'标签',v:n?n.tag:'',p:'如 灵感 / 待办'}],
+  ()=>{const x=rtVal('mn_x');if(rtEmpty(x)){toast('请填内容');return false}
+   const o={id:n?n.id:uid(),body:x,tag:val('mn_t'),pin:n?n.pin:false,date:n?n.date:TODAY};
    if(n)Object.assign(n,o);else(D.memo.notes=D.memo.notes||[]).push(o);save();toast('已保存');});
 }
 function memoPin(id){const n=(D.memo.notes||[]).find(x=>x.id===id);if(!n)return;n.pin=!n.pin;save();toast(n.pin?'已置顶':'已取消')}
 function memoVault(){
- const L=(D.memo.vault||[]).slice();
  return '<div class="card"><div class="ch"><h3>'+ic('box',15)+'重要信息</h3><div class="sp"></div>'+
   '<button class="btn sm pri" onclick="memoVaultAdd()">'+ic('plus',14)+'添加</button></div>'+
   '<div style="font-size:11px;color:var(--ink3);margin-bottom:8px;line-height:1.6">⚠️ 仅本人可见，包含敏感信息时请谨慎导入他人分享的文件</div>'+
-  (L.length?L.map(v=>'<div class="li"><div class="gr"><div class="t1">'+esc(v.title)+(v.note?'<span class="t2"> · '+esc(v.note)+'</span>':'')+'</div>'+
-   '<div class="t2" style="font-family:monospace;word-break:break-all">'+esc(v.value||'')+'</div></div>'+
-   '<button class="btn sm gh" onclick="memoVaultAdd(this.dataset.id)" data-id="'+esc(v.id)+'">'+ic('edit',12)+'</button>'+
-   '<button class="btn sm gh dg" onclick="delItem(D.memo.vault,this.dataset.id,this.dataset.label)" data-id="'+esc(v.id)+'" data-label="重要信息">'+ic('trash',12)+'</button></div>').join('')
-   :'<div class="empty">'+ic('box',28)+'账号 / 证件 / 紧急联系人</div>')+'</div>';
+  '<div id="memoList">'+memoListHtml()+'</div></div>';
 }
 function memoVaultAdd(id){
  const v=id?(D.memo.vault||[]).find(x=>x.id===id):null;
- formM(v?'编辑重要信息':'添加重要信息',[{id:'mv_t',l:'标题',v:v?v.title:'',req:1,p:'如 身份证号 / 紧急联系人'},{id:'mv_v',l:'内容 / 数值',t:'ta',v:v?v.value:'',h:46},{id:'mv_n',l:'备注',v:v?v.note:''}],
-  ()=>{const t=val('mv_t');if(!t){toast('请填标题');return false}const o={id:v?v.id:uid(),title:t,value:val('mv_v'),note:val('mv_n')};if(v)Object.assign(v,o);else(D.memo.vault=D.memo.vault||[]).push(o);save();toast('已保存');});
+ formM(v?'编辑重要信息':'添加重要信息',[{id:'mv_t',l:'标题',v:v?v.title:'',req:1,p:'如 身份证号 / 紧急联系人'},
+  {id:'mv_v',l:'内容',t:'rt',v:v?v.value:'',h:60,p:'支持加粗 / 列表，回车换行'},
+  {id:'mv_n',l:'备注',t:'rt',v:v?v.note:'',h:46,p:'补充说明 / 使用场景'}],
+  ()=>{const t=val('mv_t');if(!t){toast('请填标题');return false}
+   const o={id:v?v.id:uid(),title:t,value:rtVal('mv_v'),note:rtVal('mv_n')};
+   if(v)Object.assign(v,o);else(D.memo.vault=D.memo.vault||[]).push(o);save();toast('已保存');});
 }
 function memoChore(){
- const L=(D.memo.chores||[]).slice().sort((a,b)=>(a.done?1:0)-(b.done?1:0));
  return '<div class="card"><div class="ch"><h3>'+ic('check',15)+'琐事清单</h3><div class="sp"></div>'+
   '<button class="btn sm pri" onclick="memoChoreAdd()">'+ic('plus',14)+'添加</button></div>'+
-  (L.length?L.map(c=>'<div class="li" style="'+(c.done?'opacity:.5':'')+'">'+
-   '<span class="ck'+(c.done?' on':'')+'" onclick="memoChoreDone(this.dataset.id)" data-id="'+esc(c.id)+'">'+ic('check',14)+'</span>'+
-   '<div class="gr"><div class="t1" style="'+(c.done?'text-decoration:line-through':'')+'">'+esc(c.text)+(c.cat?(' <span class="t2">· '+esc(c.cat)+'</span>'):'')+'</div></div>'+
-   '<button class="btn sm gh" onclick="memoChoreAdd(this.dataset.id)" data-id="'+esc(c.id)+'">'+ic('edit',12)+'</button>'+
-   '<button class="btn sm gh dg" onclick="delItem(D.memo.chores,this.dataset.id,this.dataset.label)" data-id="'+esc(c.id)+'" data-label="琐事">'+ic('trash',12)+'</button></div>').join('')
-   :'<div class="empty">'+ic('check',28)+'购物清单 / 快递取件码</div>')+'</div>';
+  '<div id="memoList">'+memoListHtml()+'</div></div>';
 }
 function memoChoreAdd(id){
  const c=id?(D.memo.chores||[]).find(x=>x.id===id):null;
