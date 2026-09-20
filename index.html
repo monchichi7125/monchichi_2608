@@ -196,7 +196,9 @@ display:flex;align-items:center;justify-content:center;transition:.15s;backgroun
 .liWrap:last-child{border-bottom:0}
 .liWrap .li{border-bottom:0}
 .mSubs{background:#FBF7F3;padding:5px 12px 9px 44px;border-top:1px dashed #EADFCF}
-.mSub{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12.5px}
+.mSub{display:block;padding:4px 0;font-size:12.5px}
+.mSubRow{display:flex;align-items:center;gap:8px}
+.mSubNote{font-size:11.5px;color:var(--ink3);margin:1px 0 1px 25px;line-height:1.55;word-break:break-word}
 .mSubT{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mSubT.x{text-decoration:line-through;color:var(--ink3)}
 .mSub .ck{width:17px;height:17px;border-width:2px}
@@ -1778,7 +1780,9 @@ function R_finance(){
  const bar='<div class="tabs" style="margin-bottom:14px">'+tab('stat','资产总览')+tab('fin','财务分析')+tab('daily','记账流水')+'</div>';
  if(sub==='stat'){
   const A=D.finance.assets||[];
-  const tA=A.filter(x=>x.kind==='asset').reduce((s,x)=>s+(+x.amt||0),0);
+  const isFund=x=>x&&x.kind==='asset'&&x.cat==='公积金';
+  const exclFund=A.some(isFund);
+  const tA=A.filter(x=>x.kind==='asset'&&!isFund(x)).reduce((s,x)=>s+(+x.amt||0),0);
   const tL=A.filter(x=>x.kind==='debt').reduce((s,x)=>s+(+x.amt||0),0);
   const mkt=D.finance.mkt||{fund:0,fundUpd:''};
   const balV=+(D.invest.balance||0);
@@ -1790,9 +1794,9 @@ function R_finance(){
   const mOut=B.filter(b=>b.date.slice(0,7)===ym&&b.type==='out'&&b.book==='daily').reduce((s,b)=>s+(+b.amt||0),0);
   return bar+
   '<div class="grid g4 keep4" style="margin-bottom:14px">'+
-  stat('总资产',money(tAll),A.filter(x=>x.kind==='asset').length+' 项资产'+(tMkt>0?' · 含证券市值':''),'var(--ink)')+
+  stat('总资产',money(tAll),A.filter(x=>x.kind==='asset'&&!isFund(x)).length+' 项资产'+(tMkt>0?' · 含证券市值':'')+(exclFund?' · 不含公积金':''),'var(--ink)')+
   stat('总负债',money(tL),A.filter(x=>x.kind==='debt').length+' 项负债','var(--red)')+
-  stat('净资产',money(tAll-tL),'总资产 − 负债',tAll-tL>=0?'var(--green)':'var(--red)')+
+  stat('净资产',money(tAll-tL),'总资产 − 负债'+(exclFund?' · 不含公积金':''),tAll-tL>=0?'var(--green)':'var(--red)')+
   stat(ym+' 日常结余',money(mIn-mOut),'收 '+money(mIn)+' / 支 '+money(mOut),mIn-mOut>=0?'var(--green)':'var(--red)')+
   '</div>'+finAssets()+finSaving();
  }
@@ -1811,7 +1815,7 @@ function finAssets(){
   const l=rows(k);
   return '<div style="font-size:11.5px;color:var(--ink3);font-weight:600;margin:10px 0 6px">'+title+'</div>'+
   (l.length?'<div class="lst">'+l.map(x=>'<div class="li"><span class="tag '+(k==='asset'?'b':'r')+'">'+esc(x.cat)+'</span>'+
-  '<div class="gr"><div class="t1">'+esc(x.name)+'</div>'+(x.note?'<div class="t2">'+esc(x.note)+'</div>':'')+'</div>'+
+  '<div class="gr"><div class="t1">'+esc(x.name)+'</div>'+(x.note?'<div class="t2">'+esc(x.note)+'</div>':'')+(x.cat==='公积金'?'<div class="t2" style="color:var(--ink3)">不计入净资产合计</div>':'')+'</div>'+
   '<b class="num" style="color:'+color+'">'+money(x.amt)+'</b>'+
   '<button class="btn sm gh" onclick="assetEdit(\''+x.id+'\')">'+ic('edit',13)+'</button>'+
   '<button class="btn sm gh dg" onclick="delItem(D.finance.assets,\''+x.id+'\',\'资产\')">'+ic('trash',13)+'</button></div>').join('')+'</div>'
@@ -3939,7 +3943,7 @@ async function briefSyncArch(){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 /* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
    ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
-const BUILD='2026-09-20.2';
+const BUILD='2026-09-20.3';
 /* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
 let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
@@ -6491,7 +6495,7 @@ function memoClear(){ST.memo=(ST.memo||{});ST.memo.q='';const i=document.getElem
 function memoText(o){
  const t=ST.memo&&ST.memo.tab;
  if(t==='vault')return [rtText(o.title),rtText(o.value),rtText(o.note)].join(' ');
- if(t==='chore')return [String(o.text||''),String(o.cat||''),(o.subs||[]).map(function(s){return s.text}).join(' ')].join(' ');
+ if(t==='chore')return [String(o.text||''),String(o.cat||''),String(o.note||''),(o.subs||[]).map(function(s){return (s.text||'')+' '+(s.note||'')}).join(' ')].join(' ');
  return [rtText(o.body),String(o.tag||'')].join(' ');
 }
 function memoMatch(o){
@@ -6542,16 +6546,20 @@ function memoChoreRow(c){
  let h='<div class="liWrap">';
  h+='<div class="li" style="'+(c.done?'opacity:.5':'')+'">'+
   '<span class="ck'+(c.done?' on':'')+'" onclick="memoChoreDone(this.dataset.id)" data-id="'+esc(c.id)+'">'+ic('check',14)+'</span>'+
-  '<div class="gr"><div class="t1" style="'+(c.done?'text-decoration:line-through':'')+'">'+esc(c.text)+(c.cat?(' <span class="t2">· '+esc(c.cat)+'</span>'):'')+'</div></div>'+
+  '<div class="gr"><div class="t1" style="'+(c.done?'text-decoration:line-through':'')+'">'+esc(c.text)+(c.cat?(' <span class="t2">· '+esc(c.cat)+'</span>'):'')+'</div>'+(c.note?'<div class="t2" style="margin-top:2px">'+esc(c.note)+'</div>':'')+'</div>'+
   '<button class="btn sm gh" onclick="memoChoreToggle(\''+esc(c.id)+'\')" title="子项清单">'+ic(open?'chevU':'chevD',12)+cnt+'</button>'+
   '<button class="btn sm gh" onclick="memoChoreAdd(this.dataset.id)" data-id="'+esc(c.id)+'">'+ic('edit',12)+'</button>'+
   '<button class="btn sm gh dg" onclick="delItem(D.memo.chores,this.dataset.id,this.dataset.label)" data-id="'+esc(c.id)+'" data-label="琐事">'+ic('trash',12)+'</button></div>';
  if(open){
   h+='<div class="mSubs">';
   h+=subs.map(function(s){return '<div class="mSub'+(s.done?' on':'')+'">'+
+    '<div class="mSubRow">'+
     '<span class="ck'+(s.done?' on':'')+'" onclick="memoChoreSubDone(\''+esc(c.id)+'\',\''+esc(s.id)+'\')">'+ic('check',10)+'</span>'+
     '<span class="mSubT'+(s.done?' x':'')+'">'+esc(s.text)+'</span>'+
-    '<button class="btn sm gh dg" onclick="memoChoreSubDel(\''+esc(c.id)+'\',\''+esc(s.id)+'\')">'+ic('trash',11)+'</button>'+
+    '<button class="btn sm gh" onclick="memoChoreSubEdit(\''+esc(c.id)+'\',\''+esc(s.id)+'\')" title="编辑子项备注">'+ic('edit',11)+'</button>'+
+    '<button class="btn sm gh dg" onclick="memoChoreSubDel(\''+esc(c.id)+'\',\''+esc(s.id)+'\')" title="删除子项">'+ic('trash',11)+'</button>'+
+    '</div>'+
+    (s.note?'<div class="mSubNote">'+esc(s.note)+'</div>':'')+
     '</div>'}).join('');
   h+='<div class="mSubAdd"><input class="inp" id="mcsub_'+esc(c.id)+'" type="text" autocomplete="off" placeholder="添加子项，回车确认" onkeydown="if(event.key===\'Enter\'){event.preventDefault();memoChoreSubAdd(\''+esc(c.id)+'\')}"><button class="btn sm pri" onclick="memoChoreSubAdd(\''+esc(c.id)+'\')">'+ic('plus',13)+'添加</button></div>';
   h+='</div>';
@@ -6572,7 +6580,7 @@ function memoChoreSubAdd(pid){
  const t=i?i.value.trim():'';
  if(!t){toast('请填写子项内容');return;}
  c.subs=c.subs||[];
- c.subs.push({id:uid(),text:t,done:false});
+ c.subs.push({id:uid(),text:t,done:false,note:''});
  save();
  ST.memo=ST.memo||{};ST.memo.open=ST.memo.open||{};ST.memo.open[pid]=true;
  const el=document.getElementById('memoList');
@@ -6587,10 +6595,21 @@ function memoChoreSubDone(pid,sid){
  if(el)el.innerHTML=memoListHtml();
 }
 function memoChoreSubDel(pid,sid){
- const c=(D.memo.chores||[]).find(function(x){return x.id===pid});if(!c||!c.subs)return;
- c.subs=c.subs.filter(function(x){return x.id!==sid});save();
- const el=document.getElementById('memoList');
- if(el)el.innerHTML=memoListHtml();
+const c=(D.memo.chores||[]).find(function(x){return x.id===pid});if(!c||!c.subs)return;
+c.subs=c.subs.filter(function(x){return x.id!==sid});save();
+const el=document.getElementById('memoList');
+if(el)el.innerHTML=memoListHtml();
+}
+function memoChoreSubEdit(pid,sid){
+const c=(D.memo.chores||[]).find(function(x){return x.id===pid});if(!c||!c.subs)return;
+const s=c.subs.find(function(x){return x.id===sid});if(!s)return;
+formM('编辑子项',[
+ {id:'ms_t',l:'内容',v:s.text,req:1},
+ {id:'ms_no',l:'备注',v:s.note||'',t:'ta',h:48,p:'补充说明 / 数量 / 截止等'}
+],()=>{
+ const t=val('ms_t');if(!t){toast('请填内容');return false}
+ s.text=t;s.note=val('ms_no');save();toast('已保存');
+});
 }
 function R_memo(){
  ST.memo=ST.memo||{tab:'note',q:''};
@@ -6634,9 +6653,9 @@ function memoChore(){
   '<div id="memoList">'+memoListHtml()+'</div></div>';
 }
 function memoChoreAdd(id){
- const c=id?(D.memo.chores||[]).find(x=>x.id===id):null;
- formM(c?'编辑琐事':'添加琐事',[{id:'mc_t',l:'内容',v:c?c.text:'',req:1},{id:'mc_c',l:'分类',v:c?c.cat:'',p:'购物 / 快递 / 其它'}],
-  ()=>{const t=val('mc_t');if(!t){toast('请填内容');return false}const o={id:c?c.id:uid(),text:t,cat:val('mc_c'),done:c?c.done:false};if(c)Object.assign(c,o);else(D.memo.chores=D.memo.chores||[]).push(o);save();toast('已添加');});
+const c=id?(D.memo.chores||[]).find(x=>x.id===id):null;
+formM(c?'编辑琐事':'添加琐事',[{id:'mc_t',l:'内容',v:c?c.text:'',req:1},{id:'mc_c',l:'分类',v:c?c.cat:'',p:'购物 / 快递 / 其它'},{id:'mc_no',l:'备注',v:c?c.note:'',t:'ta',h:48,p:'补充说明 / 截止 / 地点等'}],
+ ()=>{const t=val('mc_t');if(!t){toast('请填内容');return false}const o={id:c?c.id:uid(),text:t,cat:val('mc_c'),note:val('mc_no'),done:c?c.done:false};if(c)Object.assign(c,o);else(D.memo.chores=D.memo.chores||[]).push(o);save();toast('已添加');});
 }
 function memoChoreDone(id){const c=(D.memo.chores||[]).find(x=>x.id===id);if(!c)return;c.done=!c.done;save();toast(c.done?'已完成':'已撤销')}</script>
 
