@@ -191,6 +191,19 @@ display:flex;align-items:center;justify-content:center;transition:.15s;backgroun
 .ck svg{opacity:0;width:12px;height:12px;fill:none;stroke-linecap:round;stroke-linejoin:round}
 .ck.on svg{opacity:1}
 
+/* 琐事子清单 */
+.liWrap{border-bottom:1px solid var(--line2)}
+.liWrap:last-child{border-bottom:0}
+.liWrap .li{border-bottom:0}
+.mSubs{background:#FBF7F3;padding:5px 12px 9px 44px;border-top:1px dashed #EADFCF}
+.mSub{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12.5px}
+.mSubT{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mSubT.x{text-decoration:line-through;color:var(--ink3)}
+.mSub .ck{width:17px;height:17px;border-width:2px}
+.mSub .ck svg{width:10px;height:10px}
+.mSubAdd{display:flex;gap:6px;margin-top:6px}
+.mSubAdd .inp{flex:1;min-width:0}
+
 .num{font-variant-numeric:tabular-nums}
 .pos{color:var(--red)}   /* 国内习惯: 涨/支出 红 */
 .neg{color:var(--green)} /* 跌/收入 绿 */
@@ -3926,7 +3939,7 @@ async function briefSyncArch(){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 /* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
    ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
-const BUILD='2026-09-20.1';
+const BUILD='2026-09-20.2';
 /* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
 let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
@@ -6478,7 +6491,7 @@ function memoClear(){ST.memo=(ST.memo||{});ST.memo.q='';const i=document.getElem
 function memoText(o){
  const t=ST.memo&&ST.memo.tab;
  if(t==='vault')return [rtText(o.title),rtText(o.value),rtText(o.note)].join(' ');
- if(t==='chore')return [String(o.text||''),String(o.cat||'')].join(' ');
+ if(t==='chore')return [String(o.text||''),String(o.cat||''),(o.subs||[]).map(function(s){return s.text}).join(' ')].join(' ');
  return [rtText(o.body),String(o.tag||'')].join(' ');
 }
 function memoMatch(o){
@@ -6520,11 +6533,64 @@ function memoVaultRow(v){
   '<button class="btn sm gh dg" onclick="delItem(D.memo.vault,this.dataset.id,this.dataset.label)" data-id="'+esc(v.id)+'" data-label="重要信息">'+ic('trash',12)+'</button></div>';
 }
 function memoChoreRow(c){
- return '<div class="li" style="'+(c.done?'opacity:.5':'')+'">'+
+ const subs=c.subs||[];
+ const sd=subs.filter(function(s){return s.done}).length;
+ const has=subs.length>0;
+ const q=memoQ();
+ const open=(ST.memo&&ST.memo.open&&ST.memo.open[c.id])||(q&&has);
+ const cnt=has?(' '+sd+'/'+subs.length+(sd===subs.length?' ✓':'')):'';
+ let h='<div class="liWrap">';
+ h+='<div class="li" style="'+(c.done?'opacity:.5':'')+'">'+
   '<span class="ck'+(c.done?' on':'')+'" onclick="memoChoreDone(this.dataset.id)" data-id="'+esc(c.id)+'">'+ic('check',14)+'</span>'+
   '<div class="gr"><div class="t1" style="'+(c.done?'text-decoration:line-through':'')+'">'+esc(c.text)+(c.cat?(' <span class="t2">· '+esc(c.cat)+'</span>'):'')+'</div></div>'+
+  '<button class="btn sm gh" onclick="memoChoreToggle(\''+esc(c.id)+'\')" title="子项清单">'+ic(open?'chevU':'chevD',12)+cnt+'</button>'+
   '<button class="btn sm gh" onclick="memoChoreAdd(this.dataset.id)" data-id="'+esc(c.id)+'">'+ic('edit',12)+'</button>'+
   '<button class="btn sm gh dg" onclick="delItem(D.memo.chores,this.dataset.id,this.dataset.label)" data-id="'+esc(c.id)+'" data-label="琐事">'+ic('trash',12)+'</button></div>';
+ if(open){
+  h+='<div class="mSubs">';
+  h+=subs.map(function(s){return '<div class="mSub'+(s.done?' on':'')+'">'+
+    '<span class="ck'+(s.done?' on':'')+'" onclick="memoChoreSubDone(\''+esc(c.id)+'\',\''+esc(s.id)+'\')">'+ic('check',10)+'</span>'+
+    '<span class="mSubT'+(s.done?' x':'')+'">'+esc(s.text)+'</span>'+
+    '<button class="btn sm gh dg" onclick="memoChoreSubDel(\''+esc(c.id)+'\',\''+esc(s.id)+'\')">'+ic('trash',11)+'</button>'+
+    '</div>'}).join('');
+  h+='<div class="mSubAdd"><input class="inp" id="mcsub_'+esc(c.id)+'" type="text" autocomplete="off" placeholder="添加子项，回车确认" onkeydown="if(event.key===\'Enter\'){event.preventDefault();memoChoreSubAdd(\''+esc(c.id)+'\')}"><button class="btn sm pri" onclick="memoChoreSubAdd(\''+esc(c.id)+'\')">'+ic('plus',13)+'添加</button></div>';
+  h+='</div>';
+ }
+ h+='</div>';
+ return h;
+}
+function memoChoreToggle(id){
+ ST.memo=ST.memo||{tab:'note',q:''};
+ ST.memo.open=ST.memo.open||{};
+ ST.memo.open[id]=!ST.memo.open[id];
+ const el=document.getElementById('memoList');
+ if(el)el.innerHTML=memoListHtml();
+}
+function memoChoreSubAdd(pid){
+ const c=(D.memo.chores||[]).find(function(x){return x.id===pid});if(!c)return;
+ const i=document.getElementById('mcsub_'+pid);
+ const t=i?i.value.trim():'';
+ if(!t){toast('请填写子项内容');return;}
+ c.subs=c.subs||[];
+ c.subs.push({id:uid(),text:t,done:false});
+ save();
+ ST.memo=ST.memo||{};ST.memo.open=ST.memo.open||{};ST.memo.open[pid]=true;
+ const el=document.getElementById('memoList');
+ if(el)el.innerHTML=memoListHtml();
+ if(typeof setTimeout==='function')setTimeout(function(){const n=document.getElementById('mcsub_'+pid);if(n)n.focus();},0);
+}
+function memoChoreSubDone(pid,sid){
+ const c=(D.memo.chores||[]).find(function(x){return x.id===pid});if(!c||!c.subs)return;
+ const s=c.subs.find(function(x){return x.id===sid});if(!s)return;
+ s.done=!s.done;save();
+ const el=document.getElementById('memoList');
+ if(el)el.innerHTML=memoListHtml();
+}
+function memoChoreSubDel(pid,sid){
+ const c=(D.memo.chores||[]).find(function(x){return x.id===pid});if(!c||!c.subs)return;
+ c.subs=c.subs.filter(function(x){return x.id!==sid});save();
+ const el=document.getElementById('memoList');
+ if(el)el.innerHTML=memoListHtml();
 }
 function R_memo(){
  ST.memo=ST.memo||{tab:'note',q:''};
