@@ -365,6 +365,15 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
 .gInfo{flex:1;min-width:0;display:grid;grid-template-columns:5.2em 2.2fr .55fr .55fr 1.05fr 1.7fr;gap:8px;align-items:center}
 .glb{display:none}
 .gOp{flex:0 0 140px;display:flex;gap:5px;justify-content:flex-end}
+/* 消耗品列排序 */
+.gHd{text-align:left;cursor:pointer;user-select:none;white-space:nowrap}
+.gHd:hover{color:var(--ink)}
+.gHd.on{color:var(--brand);font-weight:600}
+.gArr{font-size:9px;margin-left:2px;vertical-align:middle}
+.gSortBar{display:none}
+@media(max-width:900px){.gSortBar{display:flex;gap:5px;margin:6px 0 8px;flex-wrap:wrap}
+.gSortBar .tab{padding:5px 9px;font-size:11.5px}
+.gSortBar .gArr{font-size:8.5px;margin-left:1px}}
 
 /* 移动端 */
 @media(max-width:1080px){.calgrid{grid-template-columns:1fr}.g4{grid-template-columns:repeat(2,1fr)}
@@ -3917,7 +3926,7 @@ async function briefSyncArch(){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 /* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
    ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
-const BUILD='2026-09-18.2';
+const BUILD='2026-09-20.1';
 /* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
 let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
@@ -6079,14 +6088,11 @@ function digGoods(){
  const filterbar='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 8px">'+
   '<input class="inp" id="gq" style="flex:2;min-width:0" placeholder="搜索名称/类别" value="'+esc(STd.gq||'')+'" oninput="if(event.isComposing||event.keyCode===229)return;ST.digital.gq=this.value;digGoodsApply()" oncompositionend="ST.digital.gq=this.value;digGoodsApply()" onkeydown="if(event.keyCode===13&&!event.isComposing){event.preventDefault();ST.digital.gq=this.value;digGoodsApply();}">'+'<button class="btn sm pri" onclick="ST.digital.gq=this.previousElementSibling.value;digGoodsApply()">搜索</button>'+
   '<select class="sel" style="flex:1;min-width:0" onchange="ST.digital.gcat=this.value;digGoodsApply()"><option value="">全类别</option>'+cats.map(c=>'<option value="'+esc(c)+'"'+(STd.gcat===c?' selected':'')+'>'+esc(c)+'</option>').join('')+'</select></div>';
- const th='<div class="goodsHead">'+
-  (ST.digital.edit?'<div class="gEdit"></div>':'')+
-  '<div class="gInfo">'+
-  '<div style="text-align:left">类别</div><div style="text-align:left">名称</div><div style="text-align:left">规格</div><div style="text-align:left">数量</div><div style="text-align:left">有效期</div><div style="text-align:left">备注</div>'+
-  '</div><div class="gOp" style="text-align:right">操作</div></div>';
  return '<div class="card">'+header+filterbar+
   '<div id="goodsChips">'+digGoodsChips()+'</div>'+
-  '<div id="goodsBatch">'+digGoodsBatchBar()+'</div>'+th+
+  '<div id="goodsBatch">'+digGoodsBatchBar()+'</div>'+
+  '<div id="goodsHead">'+digGoodsHead()+'</div>'+
+  '<div id="goodsSortBar">'+digGoodsSortBar()+'</div>'+
   '<div id="goodsRows">'+digGoodsRows()+'</div></div>';
 }
 function digGoodsAdd(id){
@@ -6127,6 +6133,64 @@ function digGoodsVisible(){
  const STd=ST.digital,f=STd.gf||'all',base=digGoodsBase();
  return base.filter(g=>f==='all'?true:f==='used'?gUQ(g)>0:f==='unused'?(gUQ(g)===0):f==='near'?goodsIsNear(g):f==='expired'?goodsIsExp(g):true);
 }
+/* --- 消耗品：列排序（Excel 式：升序 → 降序 → 默认） --- */
+function digGSort(){return ((D.digital||{}).gsort)||{key:null,dir:0}}
+function digGoodsSortClick(key){
+ const Dd=D.digital||(D.digital={});
+ const s=Dd.gsort||(Dd.gsort={key:null,dir:0});
+ if(s.key!==key){s.key=key;s.dir=1;}            // 首次点该列 → 升序
+ else if(s.dir===1){s.dir=-1;}                   // 再点 → 降序
+ else{s.key=null;s.dir=0;}                        // 三击 → 恢复默认（原始顺序）
+ save();digGoodsApply();
+}
+function digGoodsVal(g,key){
+ switch(key){
+  case 'cat':return gCatOf(g);
+  case 'name':return g.name||'';
+  case 'spec':return g.spec||'';
+  case 'qty':return gRem(g);                      // 按「剩余数量」排序（与列展示一致）
+  case 'exp':return g.exp||'';                     // YYYY-MM-DD，字典序即时间序
+  case 'note':return g.note||'';
+ }
+ return '';
+}
+function digGExpired(g){return !!(g.exp&&dayDiff(g.exp,TODAY)<0)}
+function digGoodsSort(list){
+ const s=digGSort();
+ if(!s.key||!s.dir)return list;                    // 默认：保持原始数组顺序
+ const key=s.key,dir=s.dir;
+ const bottom=g=>{const v=digGoodsVal(g,key);return (!String(v).trim())||digGExpired(g);};  // 空值 / 已过期 → 末尾
+ const arr=list.slice();
+ arr.sort((a,b)=>{
+  const ba=bottom(a),bb=bottom(b);
+  if(ba&&bb)return 0;
+  if(ba)return 1;                                  // 这两项永远沉底
+  if(bb)return -1;
+  let va=digGoodsVal(a,key),vb=digGoodsVal(b,key),c;
+  if(key==='exp'){c=va<vb?-1:(va>vb?1:0);}         // 有效期：日期先后
+  else if(key==='qty'){c=va-vb;if(c)c=c>0?1:-1;}   // 数量：数值
+  else{c=String(va).localeCompare(String(vb),'zh-CN');}  // 中文按拼音
+  return c*dir;
+ });
+ return arr;
+}
+function digGdh(key,label){
+ const s=digGSort(),on=s.key===key&&s.dir;
+ const arr=on?(s.dir===1?' ▲':' ▼'):'';
+ return '<div class="gHd'+(on?' on':'')+'" onclick="digGoodsSortClick(\''+key+'\')">'+esc(label)+'<span class="gArr">'+arr+'</span></div>';
+}
+function digGoodsHead(){
+ return '<div class="goodsHead">'+
+  (ST.digital.edit?'<div class="gEdit"></div>':'')+
+  '<div class="gInfo">'+
+   digGdh('cat','类别')+digGdh('name','名称')+digGdh('spec','规格')+digGdh('qty','数量')+digGdh('exp','有效期')+digGdh('note','备注')+
+  '</div><div class="gOp" style="text-align:right">操作</div></div>';
+}
+function digGoodsSortBar(){
+ const cols=[['cat','类别'],['name','名称'],['spec','规格'],['qty','数量'],['exp','有效期'],['note','备注']];
+ const s=digGSort();
+ return '<div class="gSortBar">'+cols.map(c=>{const on=s.key===c[0]&&s.dir;const arr=on?(s.dir===1?' ▲':' ▼'):'';return '<div class="tab'+(on?' on':'')+'" onclick="digGoodsSortClick(\''+c[0]+'\')">'+esc(c[1])+'<span class="gArr">'+arr+'</span></div>';}).join('')+'</div>';
+}
 function digGoodsBatchBar(){
  const STd=ST.digital;
  if(!STd.edit)return '';
@@ -6144,7 +6208,7 @@ function digGoodsBatchBar(){
 }
 function digGoodsRows(){
  const STd=ST.digital,f=STd.gf||'all',base=digGoodsBase();
- const fl=digGoodsVisible();
+ const fl=digGoodsSort(digGoodsVisible());
  window.__goodsVis=fl.map(g=>g.id);
  const sel=ST.digital.sel||[];
  if(!fl.length)return '<div class="empty">'+ic('box',28)+'没有匹配的消耗品</div>';
@@ -6174,6 +6238,8 @@ function digGoodsApply(){
  const c=document.getElementById('goodsChips');if(c)c.innerHTML=digGoodsChips();
  const b=document.getElementById('goodsBatch');if(b)b.innerHTML=digGoodsBatchBar();
  const r=document.getElementById('goodsRows');if(r)r.innerHTML=digGoodsRows();
+ const hd=document.getElementById('goodsHead');if(hd)hd.innerHTML=digGoodsHead();
+ const sb=document.getElementById('goodsSortBar');if(sb)sb.innerHTML=digGoodsSortBar();
 }
 function digToggleSel(id){ST.digital.sel=ST.digital.sel||[];const i=ST.digital.sel.indexOf(id);if(i>=0)ST.digital.sel.splice(i,1);else ST.digital.sel.push(id);digGoodsApply();}
 function digToggleEdit(){ST.digital.edit=!ST.digital.edit;if(!ST.digital.edit)ST.digital.sel=[];render();}
