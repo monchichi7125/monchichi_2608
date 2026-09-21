@@ -8,7 +8,7 @@
  * 「改动没生效」或「接口坏了」。缓存名随构建号变化后，每次发布 = 新缓存 =
  * 旧缓存自动清空，从根上杜绝该问题。
  * 改 index.html 的 BUILD 时，这里必须同步改；_dev/_smoke.js 有门禁断言两者一致。 */
-const CACHE = 'monchichi-2026-09-20.3';
+const CACHE = 'monchichi-2026-09-21.1';
 const ASSETS = [
   './',
   './index.html',

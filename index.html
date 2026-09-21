@@ -389,6 +389,13 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
 @media(max-width:900px){.gSortBar{display:flex;gap:5px;margin:6px 0 8px;flex-wrap:wrap}
 .gSortBar .tab{padding:5px 9px;font-size:11.5px}
 .gSortBar .gArr{font-size:8.5px;margin-left:1px}}
+/* 消耗品：已用完折叠条 + 已用完行视觉区分 */
+.gFold{display:flex;align-items:center;gap:10px;margin:4px 0 6px;padding:7px 11px;border-radius:9px;background:var(--line2);font-size:12px;color:var(--ink2)}
+.gFold .gFoldT{font-weight:600}
+.gFold .gFoldT b{color:var(--ink3);font-weight:600}
+.gFold .btn{margin-left:auto}
+.goodsRow.emp{opacity:.62;background:#F4F1EE;border-left:3px solid var(--ink3)}
+.gUsedTag{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:8px;background:var(--ink3);color:#fff;font-size:10px;font-weight:600;vertical-align:middle;line-height:1.5}
 
 /* 移动端 */
 @media(max-width:1080px){.calgrid{grid-template-columns:1fr}.g4{grid-template-columns:repeat(2,1fr)}
@@ -3943,7 +3950,7 @@ async function briefSyncArch(){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 /* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
    ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
-const BUILD='2026-09-20.3';
+const BUILD='2026-09-21.1';
 /* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
 let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
@@ -6089,6 +6096,7 @@ function digAssetAdd(id){
 function gCatOf(g){return (g.cat||'')+(g.sub?(' / '+g.sub):'')}
 function gUQ(g){return g.usedQty!=null?g.usedQty:(g.used?(g.qty||1):0)}
 function gRem(g){return (g.qty||1)-gUQ(g)}
+function gEmpty(g){return gRem(g)<=0}   // 已用完：剩余数量 ≤ 0（库存为 0）
 function digGoods(){
  const STd=ST.digital,L=(D.digital.goods||[]).slice();
  const cats=[...new Set(L.map(gCatOf).filter(Boolean))].sort();
@@ -6110,6 +6118,7 @@ function digGoods(){
   '<div id="goodsBatch">'+digGoodsBatchBar()+'</div>'+
   '<div id="goodsHead">'+digGoodsHead()+'</div>'+
   '<div id="goodsSortBar">'+digGoodsSortBar()+'</div>'+
+  '<div id="goodsFold">'+digGoodsFoldBar()+'</div>'+
   '<div id="goodsRows">'+digGoodsRows()+'</div></div>';
 }
 function digGoodsAdd(id){
@@ -6224,20 +6233,24 @@ function digGoodsBatchBar(){
   '</div>';
 }
 function digGoodsRows(){
- const STd=ST.digital,f=STd.gf||'all',base=digGoodsBase();
+ const STd=ST.digital;
  const fl=digGoodsSort(digGoodsVisible());
- window.__goodsVis=fl.map(g=>g.id);
+ const collapse=STd.collapseEmpty!==false;           // 默认折叠（隐藏已用完）
+ const empties=fl.filter(gEmpty);
+ const shown=collapse?fl.filter(g=>!gEmpty(g)):fl;   // 折叠时剔除已用完
+ window.__goodsVis=shown.map(g=>g.id);               // 批量全选只选可见项
  const sel=ST.digital.sel||[];
- if(!fl.length)return '<div class="empty">'+ic('box',28)+'没有匹配的消耗品</div>';
- return fl.map(g=>{const d=g.exp?dayDiff(g.exp,TODAY):null,near=d!=null&&d<=90&&d>=0,expd=d!=null&&d<0;
-  const rem=gRem(g),uq=gUQ(g),tot=g.qty||1,full=rem===0;
-  const row=goodsCol()+(full?'opacity:.55':near?'background:var(--yellow-s)':'');
+ if(!shown.length)return '<div class="empty">'+ic('box',28)+(empties.length?('已折叠 '+empties.length+' 个已用完项，点上方「展开」查看'):'没有匹配的消耗品')+'</div>';
+ return shown.map(g=>{const d=g.exp?dayDiff(g.exp,TODAY):null,near=d!=null&&d<=90&&d>=0,expd=d!=null&&d<0;
+  const rem=gRem(g),uq=gUQ(g),tot=g.qty||1,full=gEmpty(g);
+  const row=goodsCol()+(full?'':'')+(full?'':(near?'background:var(--yellow-s)':''));
+  const cls=full?'goodsRow emp':'goodsRow';
   const qCell=rem>0?(uq>0?(rem+'<div style="font-size:10.5px;color:var(--ink3)">共'+tot+'·已用'+uq+'</div>'):(''+rem)):('0<div style="font-size:10.5px;color:var(--red)">已用完</div>');
-  return '<div class="goodsRow" style="'+row+'">'+
+  return '<div class="'+cls+'" style="'+row+'">'+
    (ST.digital.edit?'<div class="gEdit"><input type="checkbox" '+(sel.includes(g.id)?'checked':'')+' onchange="digToggleSel(\''+g.id+'\')" style="width:16px;height:16px;accent-color:var(--brand)"></div>':'')+
    '<div class="gInfo">'+
    '<div style="min-width:0;overflow:hidden"><span class="glb">类别</span>'+(gCatOf(g)?esc(gCatOf(g)):'<span style="color:var(--ink3)">—</span>')+'</div>'+
-   '<div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span class="glb">名称</span>'+esc(g.name)+'</div>'+
+   '<div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span class="glb">名称</span>'+esc(g.name)+(full?'<span class="gUsedTag">已用完</span>':'')+'</div>'+
    '<div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span class="glb">规格</span>'+(g.spec?esc(g.spec):'<span style="color:var(--ink3)">—</span>')+'</div>'+
    '<div><span class="glb">数量</span>'+qCell+'</div>'+
    '<div style="min-width:0"><span class="glb">有效期</span>'+(g.exp?(g.exp+(near?' <span style="color:var(--brand)">⚠️</span>':(expd?' <span style="color:var(--red)">已过期</span>':''))):'<span style="color:var(--ink3)">—</span>')+'</div>'+
@@ -6251,12 +6264,26 @@ function digGoodsRows(){
    '</div></div>';
  }).join('');
 }
+function digGoodsFoldBar(){
+ const fl=digGoodsSort(digGoodsVisible());
+ const n=fl.filter(gEmpty).length;
+ if(!n)return '';
+ const collapse=ST.digital.collapseEmpty!==false;
+ return '<div class="gFold"><span class="gFoldT">已用完 <b>'+n+'</b> 项'+(collapse?' · 已折叠':'')+'</span>'+
+  '<button class="btn sm gh" onclick="digGoodsFoldToggle()">'+(collapse?'展开 ▾':'折叠 ▴')+'</button></div>';
+}
+function digGoodsFoldToggle(){
+ const now=ST.digital.collapseEmpty!==false;          // 当前是否折叠
+ ST.digital.collapseEmpty=!now;
+ digGoodsApply();
+}
 function digGoodsApply(){
  const c=document.getElementById('goodsChips');if(c)c.innerHTML=digGoodsChips();
  const b=document.getElementById('goodsBatch');if(b)b.innerHTML=digGoodsBatchBar();
  const r=document.getElementById('goodsRows');if(r)r.innerHTML=digGoodsRows();
  const hd=document.getElementById('goodsHead');if(hd)hd.innerHTML=digGoodsHead();
  const sb=document.getElementById('goodsSortBar');if(sb)sb.innerHTML=digGoodsSortBar();
+ const fb=document.getElementById('goodsFold');if(fb)fb.innerHTML=digGoodsFoldBar();
 }
 function digToggleSel(id){ST.digital.sel=ST.digital.sel||[];const i=ST.digital.sel.indexOf(id);if(i>=0)ST.digital.sel.splice(i,1);else ST.digital.sel.push(id);digGoodsApply();}
 function digToggleEdit(){ST.digital.edit=!ST.digital.edit;if(!ST.digital.edit)ST.digital.sel=[];render();}
