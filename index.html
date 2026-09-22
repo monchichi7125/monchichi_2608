@@ -526,6 +526,24 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
   .study-tbl{display:none}
   .study-list{display:block}
 }
+/* 养车费用列表：横向滚动 + 表头(标题行)与年份列固定（手机端对齐可见） */
+.carFeeScroll{overflow-x:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;max-width:100%;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.carFee{border-collapse:separate;border-spacing:0;width:100%;font-size:12px;min-width:max-content}
+.carFee th,.carFee td{padding:8px 11px;white-space:nowrap;border-bottom:1px solid var(--line);text-align:right}
+.carFee thead th{position:sticky;top:0;z-index:2;background:var(--soft);color:var(--brand);font-weight:600}
+.carFee td.cfix,.carFee th.cfix{position:sticky;left:0;z-index:1;background:var(--card);text-align:left;font-weight:600;color:var(--ink);min-width:62px;border-right:1px solid var(--line)}
+.carFee thead th.cfix{position:sticky;top:0;left:0;z-index:3;background:var(--soft);border-right:1px solid var(--line)}
+.carFee .cfsum{font-weight:600;color:var(--ink)}
+.carFee tbody tr.cfcur td{background:var(--soft)}
+.carFee tbody tr.cfcur td.cfix{background:var(--soft)}
+.carFee tbody tr.cfcur td.cfsum{color:var(--brand)}
+.carFee tbody tr.cftot td{font-weight:700;color:var(--brand);border-top:2px solid var(--line);background:var(--line2)}
+.carFee tbody tr.cftot td.cfix{background:var(--line2)}
+.carFee .cfnil{color:var(--ink3)}
+@media(max-width:560px){
+ .carFee th,.carFee td{padding:7px 9px;font-size:11.5px}
+ .carFee td.cfix,.carFee th.cfix{min-width:56px}
+}
 </style>
 </head>
 <body data-page-node-id="CQG2clo5WL9k70PIqrwxVi">
@@ -2159,16 +2177,43 @@ function travelSummary(){
 function carSummary(){
  const L=(D.finance.bills||[]).filter(b=>b.book==='car'&&b.type==='out');
  if(!L.length)return '';
- const gc={};L.forEach(b=>{gc[b.cat]=(gc[b.cat]||0)+(+b.amt||0)});
- const data=Object.keys(gc).sort((a,b)=>gc[b]-gc[a]).map((k,i)=>({n:k,v:gc[k],c:PIE[i%PIE.length]}));
- const gy={};L.forEach(b=>{const y=(b.date||'').slice(0,4);gy[y]=(gy[y]||0)+(+b.amt||0)});
- const ys=Object.keys(gy).sort().reverse();
- return '<div style="margin-bottom:12px"><div style="font-size:11.5px;color:var(--ink3);font-weight:600;margin-bottom:7px">养车支出构成（按大类）</div>'+
-  pieSVG(data,180)+pieLegend(data)+'</div>'+
-  '<div style="font-size:11.5px;color:var(--ink3);font-weight:600;margin-bottom:7px">按年统计</div>'+
-  '<div style="display:flex;flex-direction:column;gap:6px">'+ys.map(y=>
-   '<div style="display:flex;align-items:center;gap:8px"><b style="flex:1;font-size:12.5px">'+y+' 年养车支出</b>'+
-   '<b class="num" style="color:var(--red)">'+money(gy[y])+'</b></div>').join('')+'</div>';
+ // 费用类别（按大类，按累计金额降序，保证列顺序稳定）
+ const g={};L.forEach(b=>{g[b.cat]=(g[b.cat]||0)+(+b.amt||0)});
+ const cats=Object.keys(g).sort((a,b)=>g[b]-g[a]);
+ // 年度集合
+ const yrSet={};L.forEach(b=>{const y=b.date.slice(0,4);yrSet[y]=(yrSet[y]||0)+(+b.amt||0)});
+ let years=Object.keys(yrSet).sort();
+ const cy=+TODAY.slice(0,4);
+ if(years.indexOf(String(cy))<0)years.push(String(cy));
+ years=years.filter(y=>y<=String(cy)).slice(-8);
+ const cyS=String(cy);
+ const yrAmt=(c,y)=>L.filter(b=>b.cat===c&&b.date.slice(0,4)===y).reduce((s,b)=>s+(+b.amt||0),0);
+ const totals=years.map(y=>yrSet[y]||0);
+ const catTot=cats.map(c=>years.reduce((s,y)=>s+yrAmt(c,y),0));
+ const grand=catTot.reduce((s,c)=>s+c,0);
+ // 概览
+ const stats='<div class="grid g2 keep2" style="margin-bottom:12px">'+
+  '<div class="stat"><div class="k">'+cyS+' 年养车支出</div><div class="v num">'+money(yrSet[cyS]||0)+'</div><div class="x">共 '+cats.length+' 个费用类别</div></div>'+
+  '<div class="stat"><div class="k">历年累计养车支出</div><div class="v num">'+money(grand)+'</div><div class="x">覆盖 '+years[0]+'–'+years[years.length-1]+'</div></div></div>';
+ // 费用列表：行=年份 · 列=费用类别；表头(标题行)与年份列横向滚动时固定
+ const tbl='<div style="font-size:12px;color:var(--ink3);margin:2px 0 8px;font-weight:600">养车费用列表（行=年份 · 列=费用类别，可左右滑动）</div>'+
+  '<div class="carFeeScroll"><table class="carFee">'+
+  '<thead><tr>'+
+   '<th class="cfix">年份</th>'+
+   cats.map(c=>'<th>'+esc(c)+'</th>').join('')+
+   '<th class="cfsum">当年合计</th>'+
+  '</tr></thead><tbody>'+
+  years.map((y,i)=>'<tr'+(y===cyS?' class="cfcur"':'')+'>'+
+   '<td class="cfix">'+y+(y===cyS?' ·今年':'')+'</td>'+
+   cats.map(c=>'<td>'+(yrAmt(c,y)?money(yrAmt(c,y)):'<span class="cfnil">—</span>')+'</td>').join('')+
+   '<td class="cfsum">'+money(totals[i])+'</td>'+
+  '</tr>').join('')+
+  '<tr class="cftot">'+
+   '<td class="cfix">历年合计</td>'+
+   catTot.map(t=>'<td>'+money(t)+'</td>').join('')+
+   '<td class="cfsum">'+money(grand)+'</td>'+
+  '</tr></tbody></table></div>';
+ return stats+tbl;
 }
 function insSummary(){
  const L=(D.finance.bills||[]).filter(b=>b.book==='ins'&&b.type==='out');
@@ -3950,7 +3995,7 @@ async function briefSyncArch(){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 /* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
    ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
-const BUILD='2026-09-21.1';
+const BUILD='2026-09-22.1';
 /* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
 let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
