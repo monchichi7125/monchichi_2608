@@ -544,6 +544,23 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
  .carFee th,.carFee td{padding:7px 9px;font-size:11.5px}
  .carFee td.cfix,.carFee th.cfix{min-width:56px}
 }
+/* 分类管理：大类 / 小类 维护 */
+.catMajor{border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin-bottom:10px;background:var(--bg)}
+.cmHead{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.cmT{display:flex;align-items:baseline;gap:8px;min-width:0;overflow:hidden}
+.cmT b{font-size:14px;color:var(--ink)}
+.cmN{font-size:11px;color:var(--ink3);flex:none}
+.cmOps{display:flex;gap:5px;flex:none}
+.cmSubs{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:3px;background:var(--soft);border:1px solid var(--line2);border-radius:999px;padding:4px 6px 4px 11px;font-size:12.5px;color:var(--ink2)}
+.chipE,.chipX{border:none;background:transparent;cursor:pointer;padding:2px;line-height:0;border-radius:6px;color:var(--ink3);display:inline-flex}
+.chipE:hover,.chipX:hover{background:rgba(0,0,0,.07);color:var(--brand)}
+.cmNil{font-size:12px;color:var(--ink3)}
+@media(max-width:560px){
+ .catMajor{padding:10px}
+ .cmT b{font-size:13px}
+ .cmOps .btn{padding:4px 7px}
+}
 </style>
 </head>
 <body data-page-node-id="CQG2clo5WL9k70PIqrwxVi">
@@ -1796,13 +1813,125 @@ const CAT_INS={'意外险':['本人','家人'],'百万医疗险':['本人','家�
 const BOOKS=[{k:'daily',n:'日常',c:CAT_DAILY},{k:'travel',n:'旅行',c:CAT_TRAVEL},{k:'car',n:'养车',c:CAT_CAR},{k:'ins',n:'保险',c:CAT_INS}];
 const INCOME_CATS=['工资','奖金','兼职副业','投资收益','红包礼金','报销回款','其它收入'];
 function bookOf(k){return BOOKS.find(b=>b.k===k)||BOOKS[0]}
+/* --- 分类管理（日常 / 旅行 / 养车 / 保险 四账本） --- */
+function catBills(bk){return (D.finance.bills||[]).filter(b=>b.book===bk)}
+function billCntCat(bk,c){return catBills(bk).filter(b=>b.cat===c).length}
+function billCntSub(bk,c,s){return catBills(bk).filter(b=>b.cat===c&&b.sub===s).length}
+function renameCat(bk,o,n){catBills(bk).forEach(b=>{if(b.cat===o)b.cat=n})}
+function renameSub(bk,c,o,n){catBills(bk).forEach(b=>{if(b.cat===c&&b.sub===o)b.sub=n})}
+function cloneCats(o){const r={};for(const k in o)r[k]=(o[k]||[]).slice();return r}
+function catSync(){const f=D.finance;f.cats={daily:cloneCats(CAT_DAILY),travel:cloneCats(CAT_TRAVEL),car:cloneCats(CAT_CAR),ins:cloneCats(CAT_INS)};save()}
+function catInit(){
+ const f=D.finance;
+ if(f&&f.cats&&typeof f.cats==='object'){
+  ['daily','travel','car','ins'].forEach(bk=>{const src=f.cats[bk];const t=bookOf(bk).c;if(src&&typeof src==='object'){Object.keys(t).forEach(k=>delete t[k]);for(const k in src)t[k]=(src[k]||[]).slice();}});
+ }
+}
+function jsStr(s){return "'"+String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,'\\n')+"'"}
+function catManage(){
+ const bk=ST.fin.catsBook||(ST.fin.catsBook='daily');const bo=bookOf(bk);
+ const bookTabs=BOOKS.map(b=>'<div class="tab'+(bk===b.k?' on':'')+'" onclick="ST.fin.catsBook=\''+b.k+'\';render()">'+esc(b.n)+'</div>').join('');
+ const majors=Object.keys(bo.c);
+ const body=majors.length?majors.map(m=>{
+  const subs=bo.c[m]||[];
+  const subHtml=subs.length?subs.map(s=>'<span class="chip">'+esc(s)+
+   '<button class="chipE" title="编辑小类" onclick="catEditSub('+jsStr(bk)+','+jsStr(m)+','+jsStr(s)+')">'+ic('edit',12)+'</button>'+
+   '<button class="chipX" title="删除小类" onclick="catDelSub('+jsStr(bk)+','+jsStr(m)+','+jsStr(s)+')">'+ic('x',12)+'</button></span>').join('')
+   :'<span class="cmNil">暂无小类，点「+ 小类」添加</span>';
+  return '<div class="catMajor"><div class="cmHead"><div class="cmT"><b>'+esc(m)+'</b><span class="cmN">'+subs.length+' 个小类</span></div>'+
+   '<div class="cmOps"><button class="btn sm gh" onclick="catAddSub('+jsStr(bk)+','+jsStr(m)+')">'+ic('plus',13)+'小类</button>'+
+   '<button class="btn sm gh" onclick="catEditMajor('+jsStr(bk)+','+jsStr(m)+')">'+ic('edit',13)+'</button>'+
+   '<button class="btn sm gh dg" onclick="catDelMajor('+jsStr(bk)+','+jsStr(m)+')">'+ic('trash',13)+'</button></div></div>'+
+   '<div class="cmSubs">'+subHtml+'</div></div>';
+ }).join('') : '<div class="empty">'+ic('filter',26)+'该账本还没有大类，点右上角「添加大类」开始</div>';
+ return '<div class="card"><div class="ch"><h3>'+ic('filter',15)+'分类管理 · '+esc(bo.n)+'</h3><div class="sp"></div>'+
+  '<button class="btn sm pri" onclick="catAddMajor()">'+ic('plus',14)+'添加大类</button></div>'+
+  '<div class="tabs" style="margin:2px 0 12px">'+bookTabs+'</div>'+body+'</div>';
+}
+function catAddMajor(){
+ const bk=ST.fin.catsBook||'daily';const bo=bookOf(bk);const C=bo.c;
+ formM('添加大类 · '+bo.n,[
+  {id:'cm_n',l:'大类名称',p:'例如：家居维修',req:1,tip:'同一账本内不可重名，最多 16 个字'}
+ ],()=>{
+  const name=val('cm_n').trim();
+  if(!name){toast('请填写大类名称');return false}
+  if(name.length>16){toast('名称最多 16 个字');return false}
+  if(Object.prototype.hasOwnProperty.call(C,name)){toast('该账本已存在同名大类');return false}
+  C[name]=[];catSync();toast('已添加大类「'+name+'」');
+ });
+}
+function catEditMajor(bk,m){
+ const bo=bookOf(bk),C=bo.c;
+ if(!Object.prototype.hasOwnProperty.call(C,m))return;
+ const cnt=billCntCat(bk,m);
+ formM('编辑大类 · '+bo.n,[
+  {id:'cm_n',l:'大类名称',v:m,req:1,tip:(cnt?('改名将同步更新 '+cnt+' 笔使用该类的账目'):'改名不影响已有账目')+'，最多 16 字'}
+ ],()=>{
+  const name=val('cm_n').trim();
+  if(!name){toast('请填写大类名称');return false}
+  if(name.length>16){toast('名称最多 16 个字');return false}
+  if(name!==m&&Object.prototype.hasOwnProperty.call(C,name)){toast('该账本已存在同名大类');return false}
+  if(name===m){toast('未修改');return}
+  const apply=()=>{const arr=C[m];delete C[m];C[name]=arr;if(cnt)renameCat(bk,m,name);catSync();toast('已改名'+(cnt?('，'+cnt+' 笔账目同步更新'):''));};
+  if(cnt){confirmM('同步账目分类','确认将把 <b>'+cnt+'</b> 笔账目的大类「'+esc(m)+'」改为「'+esc(name)+'」？',apply,'同步改名');return false;}
+  apply();
+ });
+}
+function catDelMajor(bk,m){
+ const bo=bookOf(bk),C=bo.c;
+ if(!Object.prototype.hasOwnProperty.call(C,m))return;
+ const cnt=billCntCat(bk,m);const nsub=(C[m]||[]).length;
+ const msg=cnt?('大类「'+esc(m)+'」下还有 <b>'+cnt+'</b> 笔账目。删除后这些账目的「大类」值仍保留（不会丢失），但不再出现在分类下拉中。确认删除吗？')
+   :'确认删除大类「'+esc(m)+'」'+(nsub?('及其下的 '+nsub+' 个小类'):'')+'？此操作不可撤销。';
+ confirmM('删除大类 · '+esc(m),msg,()=>{delete C[m];catSync();toast('已删除大类「'+m+'」');},'删除');
+}
+function catAddSub(bk,m){
+ const bo=bookOf(bk),C=bo.c;
+ if(!Object.prototype.hasOwnProperty.call(C,m))return;
+ const subs=C[m];
+ formM('添加小类 · '+bo.n+' / '+m,[
+  {id:'cs_n',l:'小类名称',p:'例如：保养',req:1,tip:'同一大类下不可重名，最多 16 个字'}
+ ],()=>{
+  const name=val('cs_n').trim();
+  if(!name){toast('请填写小类名称');return false}
+  if(name.length>16){toast('名称最多 16 个字');return false}
+  if(subs.includes(name)){toast('该大类下已存在同名小类');return false}
+  subs.push(name);catSync();toast('已添加小类「'+name+'」');
+ });
+}
+function catEditSub(bk,m,s){
+ const bo=bookOf(bk),C=bo.c;
+ if(!Object.prototype.hasOwnProperty.call(C,m)||!C[m].includes(s))return;
+ const subs=C[m];const cnt=billCntSub(bk,m,s);
+ formM('编辑小类 · '+bo.n+' / '+m,[
+  {id:'cs_n',l:'小类名称',v:s,req:1,tip:(cnt?('改名将同步更新 '+cnt+' 笔账目'):'改名不影响已有账目')+'，最多 16 字'}
+ ],()=>{
+  const name=val('cs_n').trim();
+  if(!name){toast('请填写小类名称');return false}
+  if(name.length>16){toast('名称最多 16 个字');return false}
+  if(name!==s&&subs.includes(name)){toast('该大类下已存在同名小类');return false}
+  if(name===s){toast('未修改');return}
+  const apply=()=>{const i=subs.indexOf(s);subs[i]=name;if(cnt)renameSub(bk,m,s,name);catSync();toast('已改名'+(cnt?('，'+cnt+' 笔账目同步更新'):''));};
+  if(cnt){confirmM('同步账目小类','确认将把 <b>'+cnt+'</b> 笔账目的小类「'+esc(s)+'」改为「'+esc(name)+'」？',apply,'同步改名');return false;}
+  apply();
+ });
+}
+function catDelSub(bk,m,s){
+ const bo=bookOf(bk),C=bo.c;
+ if(!Object.prototype.hasOwnProperty.call(C,m)||!C[m].includes(s))return;
+ const cnt=billCntSub(bk,m,s);
+ const msg=cnt?('小类「'+esc(s)+'」下还有 <b>'+cnt+'</b> 笔账目。删除后这些账目的「小类」值仍保留（不会丢失），但不再出现在分类下拉中。确认删除吗？')
+   :'确认删除小类「'+esc(s)+'」（所属大类「'+esc(m)+'」）？此操作不可撤销。';
+ confirmM('删除小类',msg,()=>{const i=C[m].indexOf(s);if(i>-1)C[m].splice(i,1);catSync();toast('已删除小类「'+s+'」');},'删除');
+}
+catInit();
 const curYM=()=>TODAY.slice(0,7);
-ST.fin={book:'daily',ym:curYM(),q:'',yF:'',mF:'',dF:'',fCat:'',fSub:'',anView:'daily',sub:'stat',edit:false};
+ST.fin={book:'daily',ym:curYM(),q:'',yF:'',mF:'',dF:'',fCat:'',fSub:'',anView:'daily',sub:'stat',edit:false,catsBook:'daily'};
 
 function R_finance(){
  const sub=ST.fin.sub||'stat';
  const tab=(k,label)=>'<div class="tab'+(sub===k?' on':'')+'" onclick="ST.fin.sub=\''+k+'\';render()">'+label+'</div>';
- const bar='<div class="tabs" style="margin-bottom:14px">'+tab('stat','资产总览')+tab('fin','财务分析')+tab('daily','记账流水')+'</div>';
+ const bar='<div class="tabs" style="margin-bottom:14px">'+tab('stat','资产总览')+tab('fin','财务分析')+tab('daily','记账流水')+tab('cats','分类管理')+'</div>';
  if(sub==='stat'){
   const A=D.finance.assets||[];
   const isFund=x=>x&&x.kind==='asset'&&x.cat==='公积金';
@@ -1826,6 +1955,7 @@ function R_finance(){
   '</div>'+finAssets()+finSaving();
  }
  if(sub==='fin'){ return bar+finAnalysis(); }
+ if(sub==='cats'){ return bar+catManage(); }
  /* 记账流水：四账本 */
  return bar+finBills();
 }
@@ -3995,7 +4125,7 @@ async function briefSyncArch(){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 /* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
    ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
-const BUILD='2026-09-22.1';
+const BUILD='2026-09-23.1';
 /* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
 let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
