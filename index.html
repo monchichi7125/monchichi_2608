@@ -1704,7 +1704,7 @@ function calCheckin(){
   '</div>'+
   '<div class="cm">'+(total>0?('第 '+Math.min(past+1,total)+' / '+total+' 天'):('已坚持 '+(past+1)+' 天'))+
   ' · 累计 '+doneN+' 次'+
-  (!act?'<span class="tag" style="margin-left:auto">已结束</span>':(on?'<span class="tag g" style="margin-left:auto">今日已签</span>':'<span class="tag r" style="margin-left:auto">待签到</span>'))+'</div>'+
+  (!act?'<span class="tag" style="margin-left:auto">已结束</span>':'')+'</div>'+
   '<div class="dots30">'+dots+'</div>'+
   '<div class="ckfoot"><button class="ckdel" onclick="delItem(D.checkins,\''+c.id+'\',\'签到任务\')" title="删除任务">'+ic('trash',12)+'删除</button></div>'+
   '</div>'
@@ -4150,7 +4150,7 @@ async function briefSyncArch(){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 /* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
    ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
-const BUILD='2026-09-24.2';
+const BUILD='2026-09-24.3';
 /* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
 let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
