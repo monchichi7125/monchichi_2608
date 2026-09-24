@@ -367,6 +367,8 @@ display:flex;align-items:center;justify-content:center;color:var(--ink3);opacity
 .dots30 i.y{background:var(--green)}
 .dots30 i.n{background:#F3C9CB}
 .dots30 i.t{background:var(--brand);box-shadow:0 0 0 2px var(--soft)}
+.dots30 i.e{cursor:pointer}
+.dots30 i.e:hover{filter:brightness(.85)}
 
 /* 图表 */
 .chart{width:100%;height:auto;display:block;overflow:visible}
@@ -1169,8 +1171,27 @@ function streakOf(c){
 function ckToggle(id){
  const c=D.checkins.find(x=>x.id===id);if(!c)return;
  c.records=c.records||{};
- if(c.records[TODAY]){delete c.records[TODAY]}else{c.records[TODAY]=1;toast('打卡成功！已连续 '+(streakOf(c))+' 天')}
+ if(c.records[TODAY]){delete c.records[TODAY]}else{c.records[TODAY]={t:new Date().toTimeString().slice(0,5),content:'',note:''};toast('打卡成功！已连续 '+(streakOf(c))+' 天')}
  save();
+}
+/* 把某日签到记录归一为 {t,content,note}（兼容旧版 records[d]=1 的写法） */
+function ckRecOf(c,d){const r=c.records&&c.records[d];return (r&&typeof r==='object')?r:{t:'',content:'',note:''}}
+/* 编辑已提交的签到记录（内容 / 时间 / 备注） */
+function ckEditRec(id,date){
+ const c=D.checkins.find(x=>x.id===id);if(!c)return;
+ c.records=c.records||{};
+ if(!c.records[date]){toast('该日尚未签到，无法编辑');return}
+ const cur=ckRecOf(c,date);
+ formM('编辑签到 · '+date,[
+  {id:'ck_t',l:'签到时间',t:'time',v:cur.t||''},
+  {id:'ck_c',l:'签到内容',v:cur.content||'',p:'当天实际完成了什么'},
+  {id:'ck_no',l:'备注',t:'ta',v:cur.note||'',h:48,p:'补充说明'}
+ ],()=>{
+  const t=val('ck_t'),content=val('ck_c'),note=val('ck_no');
+  if(!t&&!content&&!note){toast('请至少填写签到时间或内容');return false}
+  c.records[date]={t:t,content:content,note:note};
+  save();toast('已保存 '+date+' 的签到');
+ });
 }
 function todoDone(id){const t=D.todos.find(x=>x.id===id);if(!t)return;
  if(!t.rep||t.rep==='none'){t.done=!t.done;t.doneAt=t.done?TODAY:''}
@@ -1665,15 +1686,11 @@ function calCheckin(){
   const past=dayDiff(TODAY,c.start);
   const missed=(!on&&act);
   let dots='';
-  if(total>0){
-   for(let i=0;i<total;i++){const d=addDay(c.start,i);
-    let cl='';if(d===TODAY)cl='t';else if(c.records&&c.records[d])cl='y';else if(d<TODAY)cl='n';
-    dots+='<i class="'+cl+'"></i>'}
-  }else{
-   for(let i=Math.max(0,past-20);i<=past;i++){const d=addDay(c.start,i);
-    let cl='';if(d===TODAY)cl='t';else if(c.records&&c.records[d])cl='y';else cl='n';
-    dots+='<i class="'+cl+'"></i>'}
-  }
+  const dot=d=>{let cl='';if(d===TODAY)cl='t';else if(c.records&&c.records[d])cl='y';else if(d<TODAY)cl='n';
+   const ed=(cl==='y'||(cl==='t'&&c.records&&c.records[d]));
+   return '<i class="'+cl+(ed?' e':'')+'"'+(ed?' onclick="ckEditRec(\''+c.id+'\',\''+d+'\')" title="编辑该日签到"':'')+'></i>'};
+  if(total>0){for(let i=0;i<total;i++)dots+=dot(addDay(c.start,i))}
+  else{for(let i=Math.max(0,past-20);i<=past;i++)dots+=dot(addDay(c.start,i))}
   return '<div class="ckcard'+(on?' done':(missed?' miss':''))+'">'+
   '<div class="ckdel" onclick="delItem(D.checkins,\''+c.id+'\',\'签到任务\')">'+ic('trash',13)+'</div>'+
   '<div class="cn">'+esc(c.name)+'</div>'+
@@ -1681,6 +1698,7 @@ function calCheckin(){
   ' · 累计 '+doneN+' 次</div>'+
   '<div class="cb"><div class="ck'+(on?' on':'')+'" onclick="ckToggle(\''+c.id+'\')"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none">'+I.check+'</svg></div>'+
   '<span class="streak">'+ic('zap',12)+' 连续 '+st+' 天</span>'+
+  (on?'<button class="btn sm gh" style="margin-left:8px" onclick="ckEditRec(\''+c.id+'\',\''+TODAY+'\')" title="编辑今日签到">'+ic('edit',12)+'</button>':'')+
   (!act?'<span class="tag" style="margin-left:auto">已结束</span>':(on?'<span class="tag g" style="margin-left:auto">今日已签</span>':'<span class="tag r" style="margin-left:auto">待签到</span>'))+'</div>'+
   '<div class="dots30">'+dots+'</div></div>'
  }).join('')+'</div>':'<div class="empty">'+ic('target',30)+'还没有签到任务，点右上角建一个吧</div>')+
@@ -4125,7 +4143,7 @@ async function briefSyncArch(){
 const EM_UT='fa5fd1943c7b386f172d6893dbfba10b';
 /* 构建标识：每次改动递增。用途——① 失败/成功提示里带上它，用户截图即可自证「跑的是哪一份」；
    ② 可被外部一次性核对（抓线上 index.html 搜 BUILD 常量），彻底消除「改了但看到旧行为」的排查成本。 */
-const BUILD='2026-09-23.1';
+const BUILD='2026-09-24.1';
 /* 腾讯兜底最近一次失败原因（供失败提示显示，避免只报「限流/离线」这种无法定位的笼统话术） */
 let TX_LAST_ERR='';
 const LIVE_IDX=[['1.000001','上证指数'],['0.399001','深证成指'],['0.399006','创业板指'],['1.000300','沪深300'],['1.000688','科创50'],['0.399106','深证综指']];
@@ -6047,36 +6065,45 @@ function rdNoteAdd(){
 
 /* ==================== 🎬 休闲娱乐 ==================== */
 function R_fun(){
- ST.fun=ST.fun||{tab:'movie',exp:{}};
+ ST.fun=ST.fun||{tab:'movie',exp:{},q:''};
  const tab=(k,n)=>'<div class="tab'+(ST.fun.tab===k?' on':'')+'" onclick="ST.fun.tab=\''+k+'\';render()">'+n+'</div>';
  return '<div class="tabs" style="margin-bottom:14px">'+tab('movie','电影')+tab('show','演唱会·音乐剧')+tab('trip','旅行')+'</div>'+
   (ST.fun.tab==='movie'?funMovie():ST.fun.tab==='show'?funShow():funTrip());
 }
 function funMovie(){
- const L=(D.fun.movies||[]).slice().sort((a,b)=>(a.status==='want'?0:1)-(b.status==='want'?0:1)||b.date.localeCompare(a.date));
+ const q=(ST.fun.q||'').trim().toLowerCase();
+ let L=(D.fun.movies||[]).slice().sort((a,b)=>(a.status==='want'?0:1)-(b.status==='want'?0:1)||b.date.localeCompare(a.date));
+ const total=L.length;
+ if(q)L=L.filter(m=>((m.name||'')+'  '+(m.cat||'')+'  '+(m.note||'')+'  '+(m.platform||'')).toLowerCase().includes(q));
  const exp=ST.fun.exp||{};
+ const qinp='<div style="display:flex;gap:8px;margin:2px 0 10px;align-items:center">'+
+  '<span style="color:var(--ink3);display:flex;align-items:center">'+ic('search',15)+'</span>'+
+  '<input id="funq" class="inp" style="flex:1;height:36px" placeholder="搜索名称 / 类别 / 备注" value="'+esc(ST.fun.q||'')+'" oninput="ST.fun.q=this.value;clearTimeout(window._fq);window._fq=setTimeout(render,300)">'+
+  (q?'<button class="btn sm gh" onclick="ST.fun.q=\'\';render()">'+ic('x',12)+'</button>':'')+'</div>';
  return '<div class="card"><div class="ch"><h3>'+ic('film',15)+'电影 / 剧集</h3><div class="sp"></div>'+
   '<button class="btn sm pri" onclick="funMovieAdd()">'+ic('plus',14)+'想看</button></div>'+
+  qinp+
+  (q?'<div class="sub" style="margin:0 2px 8px">命中 '+L.length+' / '+total+' 部</div>':'')+
   (L.length?L.map(m=>{const done=m.status!=='want',open=done&&exp[m.id];
    if(done&&!open)return '<div class="li" onclick="funExp(\''+esc(m.id)+'\')" style="cursor:pointer;opacity:.7"><span class="tag g">已看</span>'+
-    '<div class="gr"><div class="t1">'+esc(m.name)+(m.platform?(' · '+esc(m.platform)):'')+'</div></div>'+
+    '<div class="gr"><div class="t1">'+esc(m.name)+(m.platform?(' · '+esc(m.platform)):'')+(m.cat?(' · <span style="color:var(--ink3)">'+esc(m.cat)+'</span>'):'')+'</div></div>'+
     '<span style="margin-left:auto;color:var(--ink3);font-size:12px">展开 ▾</span></div>';
    return '<div class="li"><span class="tag '+(done?'g':'o')+'">'+(done?'已看':'想看')+'</span>'+
-    '<div class="gr" '+(done?'onclick="funExp(\''+esc(m.id)+'\')" style="cursor:pointer"':'')+'><div class="t1">'+esc(m.name)+(m.platform?'<span class="t2"> · '+esc(m.platform)+'</span>':'')+'</div>'+
+    '<div class="gr" '+(done?'onclick="funExp(\''+esc(m.id)+'\')" style="cursor:pointer"':'')+'><div class="t1">'+esc(m.name)+(m.platform?'<span class="t2"> · '+esc(m.platform)+'</span>':'')+(m.cat?'<span class="tag b" style="margin-left:6px;font-size:10px">'+esc(m.cat)+'</span>':'')+'</div>'+
     '<div class="t2">'+(m.rate?('评分 '+m.rate+' · '):'')+esc(m.note||'')+'</div></div>'+
     '<button class="btn sm gh" onclick="funMovieAdd(\''+esc(m.id)+'\')" title="编辑">'+ic('edit',12)+'</button>'+
     '<button class="btn sm gh" onclick="funToggle(this.dataset.arr,this.dataset.id)" data-arr="movies" data-id="'+esc(m.id)+'" title="切换想看/已看">'+ic('refresh',12)+'</button>'+
     '<button class="btn sm gh dg" onclick="delItem(D.fun.movies,this.dataset.id,this.dataset.label)" data-id="'+esc(m.id)+'" data-label="电影">'+ic('trash',12)+'</button></div>';
   }).join('')
-  :'<div class="empty">'+ic('film',28)+'片单空空</div>')+'</div>';
+  :'<div class="empty">'+ic('film',28)+(q?'没有匹配的电影':'片单空空')+'</div>')+'</div>';
 }
 function funMovieAdd(id){
  const e=id?(D.fun.movies||[]).find(x=>x.id===id):null;
  formM(e?'编辑电影':'添加想看',[{id:'fm_n',l:'名称',v:e?e.name:'',req:1},{id:'fm_p',l:'平台（可选）',v:e?e.platform:'',p:'如 腾讯视频 / 影院'},
-  {id:'fm_r',l:'评分（已看后填，可选）',t:'number',v:e?e.rate:'',step:'0.1'},{id:'fm_no',l:'备注',v:e?e.note:''}],
+  {id:'fm_cat',l:'类别（可选）',v:e?e.cat:'',p:'如 科幻 / 喜剧 / 纪录片 / 剧集'},{id:'fm_r',l:'评分（已看后填，可选）',t:'number',v:e?e.rate:'',step:'0.1'},{id:'fm_no',l:'备注',v:e?e.note:''}],
   ()=>{const n=val('fm_n');if(!n){toast('请填名称');return false}
-   if(e){e.name=n;e.platform=val('fm_p');e.rate=nval('fm_r')||'';e.note=val('fm_no');save();toast('已更新');}
-   else{(D.fun.movies=D.fun.movies||[]).push({id:uid(),name:n,platform:val('fm_p'),rate:nval('fm_r')||'',note:val('fm_no'),status:'want',date:TODAY});save();toast('已加入片单');}
+   if(e){e.name=n;e.platform=val('fm_p');e.cat=val('fm_cat');e.rate=nval('fm_r')||'';e.note=val('fm_no');save();toast('已更新');}
+   else{(D.fun.movies=D.fun.movies||[]).push({id:uid(),name:n,platform:val('fm_p'),cat:val('fm_cat'),rate:nval('fm_r')||'',note:val('fm_no'),status:'want',date:TODAY});save();toast('已加入片单');}
   });
 }
 function funShow(){
